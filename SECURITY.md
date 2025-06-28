@@ -11,14 +11,16 @@ DropShare implements multiple layers of security to ensure private and authentic
 - **Library**: [@noble/curves](https://github.com/paulmillr/noble-curves) - audited implementation
 - **Purpose**: Establishes a shared secret between peers
 - **Implementation**: Each peer generates an ECDH key pair and exchanges public keys
+- **Key Derivation**: Uses HKDF-SHA256 with salt "dropshare" to derive 256-bit key from shared secret
 - **Result**: Derives a 256-bit AES-GCM key for file encryption
 
 ### File Encryption
 - **Algorithm**: AES-GCM (256-bit)
 - **Library**: [@noble/ciphers](https://github.com/paulmillr/noble-ciphers) - audited implementation
-- **Scope**: All file chunks are encrypted before transmission
-- **IV**: Random 96-bit initialization vector per chunk
+- **Scope**: All file chunks (64KB each) are encrypted before transmission
+- **IV**: Random 96-bit initialization vector per chunk using Web Crypto API
 - **Authentication**: Built-in authentication tag prevents tampering
+- **Fallback**: Gracefully falls back to unencrypted transmission if encryption fails
 
 ## 🛡️ Connection Verification
 
@@ -29,11 +31,12 @@ DropShare implements multiple layers of security to ensure private and authentic
 - **Implementation**: Challenge-response protocol using digital signatures
 
 ### Verification Process
-1. **Key Exchange**: Peers exchange both ECDH and ECDSA public keys
-2. **Challenge**: Each peer generates a random 32-byte challenge
-3. **Response**: Peers sign the challenge with their private ECDSA key
-4. **Verification**: Signatures are verified using the peer's public ECDSA key
-5. **Completion**: Only verified peers can exchange files
+1. **Key Exchange**: Sender initiates by sending both ECDH and ECDSA public keys
+2. **Key Response**: Receiver responds with their ECDH and ECDSA public keys
+3. **Challenge**: Sender generates a random 32-byte challenge and sends it to receiver
+4. **Response**: Receiver signs the challenge with their private ECDSA key and sends signature back
+5. **Verification**: Sender verifies the signature using receiver's public ECDSA key
+6. **Completion**: Only verified peers can exchange files; sender sends verification complete message
 
 ## 🔒 Security Properties
 
@@ -73,14 +76,16 @@ DropShare implements multiple layers of security to ensure private and authentic
 
 ### Cryptographic Primitives
 - **Hash Function**: SHA-256 from [@noble/hashes](https://github.com/paulmillr/noble-hashes)
-- **Key Derivation**: HKDF (HMAC-based Key Derivation Function)
+- **Key Derivation**: HKDF-SHA256 with salt "dropshare" for shared key derivation
 - **Random Generation**: Secure random number generation via Web Crypto API
-- **Encoding**: Hex encoding for key serialization
+- **Encoding**: Hex encoding for key and data serialization over the wire
+- **Signature Format**: Compact raw bytes format for ECDSA signatures
 
 ### Error Handling
-- Graceful fallback to unencrypted mode if crypto fails
-- Clear error messages for debugging
-- Connection status indicators for users
+- Graceful fallback to unencrypted transmission if chunk encryption fails
+- Connection status tracking: connecting → verifying → connected/error/disconnected
+- Clear error messages for debugging cryptographic failures
+- Visual indicators for connection and verification status in UI
 
 ## 🔍 Security Considerations
 
@@ -95,24 +100,29 @@ DropShare implements multiple layers of security to ensure private and authentic
 - ⚠️ **Traffic Analysis**: Connection patterns may be observable
 - ⚠️ **Endpoint Security**: Devices must be trusted and secure
 - ⚠️ **Social Engineering**: Users must verify they're connecting to intended peers
+- ⚠️ **Fallback Risk**: System falls back to unencrypted transmission if encryption fails
+- ⚠️ **Key Storage**: Cryptographic keys stored in memory only (lost on page refresh)
 
 ## 📋 Usage
 
 The security features are automatically enabled and transparent to users:
 
-1. **Senders**: Generate QR codes as usual - encryption happens automatically
-2. **Receivers**: Scan QR codes - verification status is shown during connection
+1. **Senders**: Generate QR codes as usual - encryption and verification happen automatically
+2. **Receivers**: Scan QR codes - verification status is shown during connection process
 3. **Status Indicators**:
-   - 🟡 Yellow dot: Peer verification in progress
-   - 🟢 Green dot: Peer verified and secure
-   - 🔴 Red status: Verification failed
+   - 🟡 Yellow dot (pulsing): Peer verification in progress
+   - 🟢 Green dot: Peer verified and secure connection established
+   - 🔴 Red status: Verification failed or connection error
+4. **Connection States**: connecting → verifying → connected/error/disconnected
 
 ## 🛠️ Technical Notes
 
 ### Performance Impact
-- Minimal overhead for key generation and exchange
-- Encryption adds ~10-20ms per file chunk
+- Minimal overhead for key generation and exchange (~1-2ms)
+- File chunking: 64KB chunks with 10ms delay between transmissions
+- Encryption adds minimal overhead per chunk using optimized Noble libraries
 - Verification completes in <1 second typically
+- HKDF key derivation: ~1-5ms overhead per connection
 
 ### Browser Compatibility
 - Requires modern browsers with Web Crypto API support for random generation
@@ -126,7 +136,8 @@ The noble cryptographic libraries used have undergone multiple independent secur
 - **@noble/hashes**: Multiple audits by Cure53 and other security firms
 
 ### Future Enhancements
-- [ ] Perfect Forward Secrecy with ephemeral keys
 - [ ] Zero-knowledge proof of identity
-- [ ] Encrypted metadata transmission
-- [ ] Advanced threat detection
+- [ ] Encrypted metadata transmission (file names and sizes)
+- [ ] Advanced threat detection and connection monitoring
+- [ ] Persistent peer identity verification
+- [ ] Multi-party file sharing with group verification
