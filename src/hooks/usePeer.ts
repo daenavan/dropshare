@@ -231,12 +231,20 @@ export function usePeer() {
 							peerKeysRef.current[conn.peer].sharedKey = sharedKey;
 						}
 
-						// Send our public keys back if this is a receiver
-						if (
-							!isSender &&
-							dhKeyPairRef.current &&
-							signingKeyPairRef.current
-						) {
+						// If we are the sender, we just received the receiver's keys.
+						// Now we can initiate the challenge.
+						if (isSender) {
+							const challenge = generateChallenge();
+							challengesRef.current[conn.peer] = challenge;
+
+							conn.send({
+								type: "CHALLENGE",
+								challenge: arrayBufferToBase64(challenge),
+							});
+						}
+						// If we are the receiver, we just received the sender's keys.
+						// We need to send our keys back.
+						else if (dhKeyPairRef.current && signingKeyPairRef.current) {
 							const dhPublicKeyBuffer = exportPublicKey(
 								dhKeyPairRef.current.publicKey,
 							);
@@ -250,15 +258,6 @@ export function usePeer() {
 								signingPublicKey: arrayBufferToBase64(signingPublicKeyBuffer),
 							});
 						}
-
-						// Start challenge-response verification
-						const challenge = generateChallenge();
-						challengesRef.current[conn.peer] = challenge;
-
-						conn.send({
-							type: "CHALLENGE",
-							challenge: arrayBufferToBase64(challenge),
-						});
 					} catch (error) {
 						console.error("Key exchange failed:", error);
 						setConnectionStatus("error");
