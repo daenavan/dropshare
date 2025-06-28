@@ -1,4 +1,4 @@
-import { Check, Copy, FileText, QrCode, Users } from "lucide-react";
+import { Check, Copy, FileText, QrCode, Users, X } from "lucide-react";
 import { useState } from "react";
 import { useDropzone } from "react-dropzone";
 import QRCode from "react-qr-code";
@@ -20,6 +20,7 @@ interface SenderViewProps {
 	connectedPeers: ConnectedPeer[];
 	onFilesSelected: (files: File[]) => void;
 	onRemoveFile: (fileId: string) => void;
+	onRemovePeer: (peerId: string) => void;
 }
 
 export function SenderView({
@@ -28,6 +29,7 @@ export function SenderView({
 	connectedPeers,
 	onFilesSelected,
 	onRemoveFile,
+	onRemovePeer,
 }: SenderViewProps) {
 	const [copySuccess, setCopySuccess] = useState(false);
 
@@ -179,15 +181,34 @@ export function SenderView({
 									{connectedPeers.map((peer) => (
 										<div
 											key={peer.id}
-											className="flex items-center p-3 border rounded-lg"
+											className="flex items-center justify-between p-3 border rounded-lg"
 										>
-											<div className="w-3 h-3 bg-green-500 rounded-full mr-3" />
-											<div>
-												<p className="font-medium">{peer.name}</p>
-												<p className="text-xs text-muted-foreground">
-													{peer.id.slice(0, 8)}...
-												</p>
+											<div className="flex items-center">
+												<div
+													className={`w-3 h-3 rounded-full mr-3 ${
+														peer.isVerified
+															? "bg-green-500"
+															: "bg-yellow-500 animate-pulse"
+													}`}
+												/>
+												<div>
+													<p className="font-medium">{peer.name}</p>
+													<p className="text-xs text-muted-foreground">
+														{peer.id.slice(0, 8)}...
+														{peer.isVerified
+															? " (Verified)"
+															: " (Verifying...)"}
+													</p>
+												</div>
 											</div>
+											<Button
+												variant="ghost"
+												size="icon"
+												onClick={() => onRemovePeer(peer.id)}
+												className="h-8 w-8"
+											>
+												<X className="h-4 w-4" />
+											</Button>
 										</div>
 									))}
 								</div>

@@ -18,10 +18,12 @@ export default function App() {
 		receivedFiles,
 		downloadProgress,
 		isConnected,
+		connectionStatus,
 		addFiles,
 		connectToSender,
 		requestFile,
 		removeFile,
+		removePeer,
 	} = usePeer();
 
 	// Check for sender ID in URL hash and connect if present
@@ -75,6 +77,7 @@ export default function App() {
 					downloadProgress={downloadProgress}
 					onRequestFile={requestFile}
 					isConnected={isConnected}
+					connectionStatus={connectionStatus}
 				/>
 			);
 		}
@@ -100,6 +103,7 @@ export default function App() {
 					addFiles(files);
 				}}
 				onRemoveFile={removeFile}
+				onRemovePeer={removePeer}
 			/>
 		);
 	};

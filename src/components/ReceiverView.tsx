@@ -1,4 +1,4 @@
-import { FileText, Loader2, Wifi } from "lucide-react";
+import { FileText, Loader2, Wifi, WifiOff } from "lucide-react";
 import { FileItem } from "@/components/FileItem";
 import {
 	Card,
@@ -20,6 +20,12 @@ interface ReceiverViewProps {
 	downloadProgress: Record<string, number>;
 	onRequestFile: (fileId: string) => void;
 	isConnected: boolean;
+	connectionStatus:
+		| "connecting"
+		| "verifying"
+		| "connected"
+		| "error"
+		| "disconnected";
 }
 
 export function ReceiverView({
@@ -27,6 +33,7 @@ export function ReceiverView({
 	downloadProgress,
 	onRequestFile,
 	isConnected,
+	connectionStatus,
 }: ReceiverViewProps) {
 	const isDownloading = (fileId: string) => {
 		return fileId in downloadProgress;
@@ -37,20 +44,59 @@ export function ReceiverView({
 	};
 
 	if (!isConnected) {
+		const getStatusInfo = () => {
+			switch (connectionStatus) {
+				case "connecting":
+					return {
+						title: "Connecting...",
+						description: "Establishing connection to the sender",
+						icon: <Wifi className="h-5 w-5" />,
+					};
+				case "verifying":
+					return {
+						title: "Verifying Connection...",
+						description: "Performing security verification with the sender",
+						icon: <Loader2 className="h-5 w-5 animate-spin" />,
+					};
+				case "error":
+					return {
+						title: "Connection Failed",
+						description:
+							"Failed to establish secure connection. Please try again.",
+						icon: <Wifi className="h-5 w-5 text-destructive" />,
+					};
+				case "disconnected":
+					return {
+						title: "Disconnected",
+						description: "The sender has disconnected.",
+						icon: <WifiOff className="h-5 w-5" />,
+					};
+				default:
+					return {
+						title: "Connecting...",
+						description: "Establishing connection to the sender",
+						icon: <Wifi className="h-5 w-5" />,
+					};
+			}
+		};
+
+		const statusInfo = getStatusInfo();
+
 		return (
 			<Card className="w-full max-w-lg mx-auto text-center">
 				<CardHeader>
 					<CardTitle className="flex items-center justify-center gap-2">
-						<Wifi className="h-5 w-5" />
-						Connecting...
+						{statusInfo.icon}
+						{statusInfo.title}
 					</CardTitle>
-					<CardDescription>
-						Establishing connection to the sender
-					</CardDescription>
+					<CardDescription>{statusInfo.description}</CardDescription>
 				</CardHeader>
 				<CardContent>
 					<div className="flex items-center justify-center py-8">
-						<Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+						{connectionStatus !== "error" &&
+							connectionStatus !== "disconnected" && (
+								<Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+							)}
 					</div>
 				</CardContent>
 			</Card>

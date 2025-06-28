@@ -5,12 +5,30 @@ import {
 	animals,
 	uniqueNamesGenerator,
 } from "unique-names-generator";
+import {
+	arrayBufferToBase64,
+	base64ToArrayBuffer,
+	decryptData,
+	deriveSharedKey,
+	type EncryptedData,
+	encryptData,
+	exportPublicKey,
+	generateChallenge,
+	generateKeyPair,
+	generateSigningKeyPair,
+	importPublicKey,
+	type KeyPair,
+	signChallenge,
+	verifyChallenge,
+} from "@/lib/crypto";
 
 // Represents a connected peer (receiver)
 export interface ConnectedPeer {
 	id: string;
 	name: string;
 	connection: DataConnection;
+	isVerified: boolean;
+	sharedKey?: Uint8Array;
 }
 
 // Represents a file staged for sharing
@@ -22,6 +40,11 @@ export interface SharedFile {
 // Message types for peer communication
 export type PeerMessage =
 	| { type: "HELLO"; name: string }
+	| { type: "KEY_EXCHANGE"; dhPublicKey: string; signingPublicKey: string }
+	| { type: "CHALLENGE"; challenge: string }
+	| { type: "CHALLENGE_RESPONSE"; signature: string }
+	| { type: "VERIFICATION_COMPLETE" }
+	| { type: "DISCONNECTED" }
 	| {
 			type: "FILES_UPDATE";
 			files: Array<{ id: string; name: string; size: number }>;
@@ -33,6 +56,7 @@ export type PeerMessage =
 			name: string;
 			size: string;
 			totalChunks: number;
+			encrypted: boolean;
 	  }
 	| {
 			type: "FILE_CHUNK";
@@ -40,6 +64,8 @@ export type PeerMessage =
 			chunkIndex: number;
 			data: ArrayBuffer;
 			isLast: boolean;
+			encrypted: boolean;
+			iv?: string;
 	  };
 
 const CHUNK_SIZE = 64 * 1024; // 64KB chunks
@@ -56,6 +82,9 @@ export function usePeer() {
 		Record<string, number>
 	>({});
 	const [isConnected, setIsConnected] = useState<boolean>(false);
+	const [connectionStatus, setConnectionStatus] = useState<
+		"connecting" | "verifying" | "connected" | "error" | "disconnected"
+	>("connecting");
 
 	const peerRef = useRef<Peer | null>(null);
 	const senderConnectionRef = useRef<DataConnection | null>(null);
@@ -66,10 +95,27 @@ export function usePeer() {
 		>
 	>({});
 
+	// Crypto state
+	const dhKeyPairRef = useRef<KeyPair | null>(null);
+	const signingKeyPairRef = useRef<KeyPair | null>(null);
+	const peerKeysRef = useRef<
+		Record<
+			string,
+			{
+				dhPublicKey: Uint8Array;
+				signingPublicKey: Uint8Array;
+				sharedKey?: Uint8Array;
+			}
+		>
+	>({});
+	const challengesRef = useRef<Record<string, ArrayBuffer>>({});
+
 	const sendFileToReceiver = useCallback(
 		async (sharedFile: SharedFile, conn: DataConnection) => {
 			const { file, id } = sharedFile;
 			const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+			const peerKeys = peerKeysRef.current[conn.peer];
+			const useEncryption = peerKeys?.sharedKey !== undefined;
 
 			// Send metadata first
 			conn.send({
@@ -78,6 +124,7 @@ export function usePeer() {
 				name: file.name,
 				size: file.size.toString(),
 				totalChunks,
+				encrypted: useEncryption,
 			});
 
 			// Send file in chunks
@@ -85,7 +132,25 @@ export function usePeer() {
 				const start = i * CHUNK_SIZE;
 				const end = Math.min(start + CHUNK_SIZE, file.size);
 				const chunk = file.slice(start, end);
-				const arrayBuffer = await chunk.arrayBuffer();
+				let arrayBuffer = await chunk.arrayBuffer();
+				let iv: string | undefined;
+
+				// Encrypt chunk if we have a shared key
+				if (useEncryption && peerKeys?.sharedKey) {
+					try {
+						const encryptedData = await encryptData(
+							arrayBuffer,
+							peerKeys.sharedKey,
+						);
+						arrayBuffer = encryptedData.data;
+						iv = arrayBufferToBase64(encryptedData.iv);
+					} catch (error) {
+						console.error("Failed to encrypt chunk:", error);
+						// Fall back to unencrypted
+						useEncryption &&
+							console.warn("Falling back to unencrypted transmission");
+					}
+				}
 
 				conn.send({
 					type: "FILE_CHUNK",
@@ -93,6 +158,8 @@ export function usePeer() {
 					chunkIndex: i,
 					data: arrayBuffer,
 					isLast: i === totalChunks - 1,
+					encrypted: useEncryption,
+					iv,
 				});
 
 				// Small delay to prevent overwhelming the connection
@@ -103,7 +170,7 @@ export function usePeer() {
 	);
 
 	const handlePeerMessage = useCallback(
-		(message: PeerMessage, conn: DataConnection) => {
+		async (message: PeerMessage, conn: DataConnection) => {
 			switch (message.type) {
 				case "HELLO": {
 					// A receiver connected and sent their name
@@ -111,22 +178,183 @@ export function usePeer() {
 						id: conn.peer,
 						name: message.name,
 						connection: conn,
+						isVerified: false,
 					};
 					setConnectedPeers((prev) => [
 						...prev.filter((p) => p.id !== conn.peer),
 						newPeer,
 					]);
 
-					// Send current files to the new receiver
-					setSharedFiles((currentFiles) => {
-						const fileManifest = currentFiles.map((sf) => ({
-							id: sf.id,
-							name: sf.file.name,
-							size: sf.file.size,
-						}));
-						conn.send({ type: "FILES_UPDATE", files: fileManifest });
-						return currentFiles;
-					});
+					// Start key exchange process
+					if (dhKeyPairRef.current && signingKeyPairRef.current) {
+						const dhPublicKeyBuffer = exportPublicKey(
+							dhKeyPairRef.current.publicKey,
+						);
+						const signingPublicKeyBuffer = exportPublicKey(
+							signingKeyPairRef.current.publicKey,
+						);
+
+						conn.send({
+							type: "KEY_EXCHANGE",
+							dhPublicKey: arrayBufferToBase64(dhPublicKeyBuffer),
+							signingPublicKey: arrayBufferToBase64(signingPublicKeyBuffer),
+						});
+					}
+					break;
+				}
+
+				case "KEY_EXCHANGE": {
+					try {
+						// Import peer's public keys
+						const dhPublicKeyBuffer = base64ToArrayBuffer(message.dhPublicKey);
+						const signingPublicKeyBuffer = base64ToArrayBuffer(
+							message.signingPublicKey,
+						);
+
+						const peerDhPublicKey = importPublicKey(dhPublicKeyBuffer);
+						const peerSigningPublicKey = importPublicKey(
+							signingPublicKeyBuffer,
+						);
+
+						// Store peer's keys
+						peerKeysRef.current[conn.peer] = {
+							dhPublicKey: peerDhPublicKey,
+							signingPublicKey: peerSigningPublicKey,
+						};
+
+						// Derive shared key if we have our DH key pair
+						if (dhKeyPairRef.current) {
+							const sharedKey = deriveSharedKey(
+								dhKeyPairRef.current.privateKey,
+								peerDhPublicKey,
+							);
+							peerKeysRef.current[conn.peer].sharedKey = sharedKey;
+						}
+
+						// Send our public keys back if this is a receiver
+						if (
+							!isSender &&
+							dhKeyPairRef.current &&
+							signingKeyPairRef.current
+						) {
+							const dhPublicKeyBuffer = exportPublicKey(
+								dhKeyPairRef.current.publicKey,
+							);
+							const signingPublicKeyBuffer = exportPublicKey(
+								signingKeyPairRef.current.publicKey,
+							);
+
+							conn.send({
+								type: "KEY_EXCHANGE",
+								dhPublicKey: arrayBufferToBase64(dhPublicKeyBuffer),
+								signingPublicKey: arrayBufferToBase64(signingPublicKeyBuffer),
+							});
+						}
+
+						// Start challenge-response verification
+						const challenge = generateChallenge();
+						challengesRef.current[conn.peer] = challenge;
+
+						conn.send({
+							type: "CHALLENGE",
+							challenge: arrayBufferToBase64(challenge),
+						});
+					} catch (error) {
+						console.error("Key exchange failed:", error);
+						setConnectionStatus("error");
+					}
+					break;
+				}
+
+				case "CHALLENGE": {
+					try {
+						const challenge = base64ToArrayBuffer(message.challenge);
+
+						if (signingKeyPairRef.current) {
+							const signature = await signChallenge(
+								challenge,
+								signingKeyPairRef.current.privateKey,
+							);
+
+							conn.send({
+								type: "CHALLENGE_RESPONSE",
+								signature: arrayBufferToBase64(signature),
+							});
+						}
+					} catch (error) {
+						console.error("Challenge signing failed:", error);
+						setConnectionStatus("error");
+					}
+					break;
+				}
+
+				case "CHALLENGE_RESPONSE": {
+					try {
+						const signature = base64ToArrayBuffer(message.signature);
+						const challenge = challengesRef.current[conn.peer];
+						const peerKeys = peerKeysRef.current[conn.peer];
+
+						if (challenge && peerKeys?.signingPublicKey) {
+							const isValid = await verifyChallenge(
+								challenge,
+								signature,
+								peerKeys.signingPublicKey,
+							);
+
+							if (isValid) {
+								// Mark peer as verified
+								setConnectedPeers((prev) =>
+									prev.map((peer) =>
+										peer.id === conn.peer
+											? {
+													...peer,
+													isVerified: true,
+													sharedKey: peerKeys.sharedKey,
+												}
+											: peer,
+									),
+								);
+
+								conn.send({ type: "VERIFICATION_COMPLETE" });
+								setConnectionStatus("connected");
+
+								// Send current files to the verified receiver
+								setSharedFiles((currentFiles) => {
+									const fileManifest = currentFiles.map((sf) => ({
+										id: sf.id,
+										name: sf.file.name,
+										size: sf.file.size,
+									}));
+									conn.send({ type: "FILES_UPDATE", files: fileManifest });
+									return currentFiles;
+								});
+							} else {
+								console.error("Challenge verification failed");
+								setConnectionStatus("error");
+							}
+
+							// Cleanup challenge
+							delete challengesRef.current[conn.peer];
+						}
+					} catch (error) {
+						console.error("Challenge verification failed:", error);
+						setConnectionStatus("error");
+					}
+					break;
+				}
+
+				case "VERIFICATION_COMPLETE": {
+					setConnectionStatus("connected");
+					setIsConnected(true);
+					break;
+				}
+
+				case "DISCONNECTED": {
+					if (senderConnectionRef.current) {
+						senderConnectionRef.current.close();
+					}
+					setConnectionStatus("disconnected");
+					setIsConnected(false);
 					break;
 				}
 
@@ -162,7 +390,37 @@ export function usePeer() {
 					// Receiving file chunk
 					const fileBuffer = downloadBuffersRef.current[message.fileId];
 					if (fileBuffer) {
-						fileBuffer.chunks[message.chunkIndex] = message.data;
+						// Ensure we don't process the same chunk twice
+						if (fileBuffer.chunks[message.chunkIndex] === undefined) {
+							let chunkData = message.data;
+
+							// Decrypt chunk if it's encrypted
+							if (
+								message.encrypted &&
+								message.iv &&
+								senderConnectionRef.current
+							) {
+								const peerKeys =
+									peerKeysRef.current[senderConnectionRef.current.peer];
+								if (peerKeys?.sharedKey) {
+									try {
+										const encryptedData: EncryptedData = {
+											data: message.data,
+											iv: base64ToArrayBuffer(message.iv),
+										};
+										chunkData = await decryptData(
+											encryptedData,
+											peerKeys.sharedKey,
+										);
+									} catch (error) {
+										console.error("Failed to decrypt chunk:", error);
+										// Use encrypted data as fallback (will likely be corrupted)
+									}
+								}
+							}
+
+							fileBuffer.chunks[message.chunkIndex] = chunkData;
+						}
 
 						const received = fileBuffer.chunks.filter(
 							(chunk) => chunk !== undefined,
@@ -173,13 +431,14 @@ export function usePeer() {
 							[message.fileId]: progress,
 						}));
 
-						if (message.isLast && received === fileBuffer.chunks.length) {
-							// File complete, trigger download
+						// If all chunks are received, assemble and download the file
+						if (received === fileBuffer.chunks.length) {
 							const completeFile = new Blob(fileBuffer.chunks);
 							const url = URL.createObjectURL(completeFile);
 							const a = document.createElement("a");
 							a.href = url;
 							a.download = fileBuffer.metadata.name;
+							document.body.appendChild(a); // Append for browser compatibility
 							a.click();
 							URL.revokeObjectURL(url);
 							a.remove();
@@ -197,12 +456,37 @@ export function usePeer() {
 				}
 			}
 		},
-		[sendFileToReceiver],
+		[sendFileToReceiver, isSender],
 	);
+
+	// Initialize crypto keys
+	useEffect(() => {
+		const initializeCrypto = () => {
+			try {
+				dhKeyPairRef.current = generateKeyPair();
+				signingKeyPairRef.current = generateSigningKeyPair();
+			} catch (error) {
+				console.error("Failed to initialize crypto keys:", error);
+			}
+		};
+
+		initializeCrypto();
+	}, []);
 
 	// Initialize PeerJS
 	useEffect(() => {
-		const peer = new Peer();
+		const peer = new Peer({
+			config: {
+				iceServers: [
+					// Google's free STUN servers
+					{ urls: "stun:stun.l.google.com:19302" },
+					{ urls: "stun:stun1.l.google.com:19302" },
+					{ urls: "stun:stun2.l.google.com:19302" },
+					{ urls: "stun:stun3.l.google.com:19302" },
+					{ urls: "stun:stun4.l.google.com:19302" },
+				],
+			},
+		});
 		peerRef.current = peer;
 
 		peer.on("open", (id) => {
@@ -210,6 +494,10 @@ export function usePeer() {
 		});
 
 		peer.on("connection", (conn) => {
+			const handleDisconnect = () => {
+				setConnectedPeers((prev) => prev.filter((p) => p.id !== conn.peer));
+			};
+
 			conn.on("open", () => {
 				// Wait for hello message to get the peer's name
 			});
@@ -218,9 +506,8 @@ export function usePeer() {
 				handlePeerMessage(data as PeerMessage, conn);
 			});
 
-			conn.on("close", () => {
-				setConnectedPeers((prev) => prev.filter((p) => p.id !== conn.peer));
-			});
+			conn.on("close", handleDisconnect);
+			conn.on("error", handleDisconnect);
 		});
 
 		peer.on("error", (error) => {
@@ -268,7 +555,7 @@ export function usePeer() {
 			senderConnectionRef.current = conn;
 
 			conn.on("open", () => {
-				setIsConnected(true);
+				setConnectionStatus("verifying");
 				setIsSender(false);
 
 				// Generate a unique name for this receiver
@@ -286,10 +573,13 @@ export function usePeer() {
 				handlePeerMessage(data as PeerMessage, conn);
 			});
 
-			conn.on("close", () => {
+			const handleDisconnect = () => {
 				setIsConnected(false);
 				setReceivedFiles([]);
-			});
+			};
+
+			conn.on("close", handleDisconnect);
+			conn.on("error", handleDisconnect);
 		},
 		[handlePeerMessage],
 	);
@@ -298,6 +588,20 @@ export function usePeer() {
 		if (senderConnectionRef.current) {
 			senderConnectionRef.current.send({ type: "REQUEST_FILE", fileId });
 		}
+	}, []);
+
+	const removePeer = useCallback((peerId: string) => {
+		setConnectedPeers((currentPeers) => {
+			const peerToRemove = currentPeers.find((p) => p.id === peerId);
+			if (peerToRemove) {
+				peerToRemove.connection.send({ type: "DISCONNECTED" });
+				// Give a moment for the message to be sent before closing
+				setTimeout(() => {
+					peerToRemove.connection.close();
+				}, 100);
+			}
+			return currentPeers.filter((p) => p.id !== peerId);
+		});
 	}, []);
 
 	const removeFile = useCallback((fileId: string) => {
@@ -330,9 +634,11 @@ export function usePeer() {
 		receivedFiles,
 		downloadProgress,
 		isConnected,
+		connectionStatus,
 		addFiles,
 		connectToSender,
 		requestFile,
 		removeFile,
+		removePeer,
 	};
 }

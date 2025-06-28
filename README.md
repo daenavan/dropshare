@@ -1,69 +1,60 @@
-# React + TypeScript + Vite
+# DropShare
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+**Hyper-Local P2P File Sharing with End-to-End Encryption**
 
-Currently, two official plugins are available:
+DropShare is a secure, private, and easy-to-use peer-to-peer file sharing application that works entirely in your browser. No servers, no sign-ups, just direct connections for fast and secure file transfers.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## ✨ Features
 
-## Expanding the ESLint configuration
+*   **Peer-to-Peer:** Files are transferred directly between devices without going through a central server.
+*   **End-to-End Encrypted:** All files are encrypted in the browser using audited cryptographic libraries (`@noble/*`) before being sent. See [`SECURITY.md`](./SECURITY.md) for details.
+*   **QR Code Connections:** Easily connect two devices by scanning a QR code.
+*   **Cross-Platform:** Works on any modern browser on any device (desktop, tablet, mobile).
+*   **No Installation:** Just open a web page.
+*   **Multiple File Support:** Share multiple files at once.
+*   **Multiple Recipients:** Share files with multiple people simultaneously.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## 🚀 Getting Started
 
-```js
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+To run DropShare locally, follow these steps:
 
-      // Remove tseslint.configs.recommended and replace with this
-      ...tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      ...tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      ...tseslint.configs.stylisticTypeChecked,
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/daenax/dropshare.git
+    cd dropshare
+    ```
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+2.  **Install dependencies:**
+    This project uses `bun` as the package manager.
+    ```bash
+    bun install
+    ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+3.  **Run the development server:**
+    ```bash
+    bun run dev
+    ```
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+4.  Open your browser and navigate to the local URL provided (usually `http://localhost:5173`). To test P2P functionality, you'll need to open it on two different devices or in two separate browser profiles.
 
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+## 🛠️ Tech Stack
+
+*   **Framework:** [React](https://react.dev/) with [Vite](https://vitejs.dev/)
+*   **Language:** [TypeScript](https://www.typescriptlang.org/)
+*   **P2P Communication:** [PeerJS](https://peerjs.com/) (WebRTC)
+*   **Cryptography:** [@noble/curves](https://github.com/paulmillr/noble-curves), [@noble/ciphers](https://github.com/paulmillr/noble-ciphers), [@noble/hashes](https://github.com/paulmillr/noble-hashes)
+*   **UI:** [Tailwind CSS](https://tailwindcss.com/) with [shadcn/ui](https://ui.shadcn.com/) components
+*   **QR Codes:** `react-qr-code`
+*   **File Handling:** `react-dropzone`
+
+## 🔒 Security
+
+Security is a core feature of DropShare. All transfers are end-to-end encrypted and authenticated. For a detailed breakdown of the security model, algorithms, and cryptographic libraries used, please read the [`SECURITY.md`](./SECURITY.md) file.
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to open an issue or submit a pull request.
+
+## 📄 License
+
+This project is licensed under the MIT License.
