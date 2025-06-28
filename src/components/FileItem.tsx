@@ -47,7 +47,7 @@ export function FileItem(props: FileItemProps) {
 		return fileName.substring(lastDot + 1).toUpperCase();
 	};
 
-	const truncateFileName = (fileName: string, maxLength: number = 30) => {
+	const truncateFileName = (fileName: string, maxLength = 30) => {
 		if (fileName.length <= maxLength) {
 			return fileName;
 		}

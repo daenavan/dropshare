@@ -24,10 +24,8 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
 				videoRef.current &&
 				videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA
 			) {
-				// biome-ignore lint/style/noNonNullAssertion: <This is a valid use case>
 				const canvas = canvasRef.current!;
 				const video = videoRef.current;
-				// biome-ignore lint/style/noNonNullAssertion: <This is a valid use case>
 				const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
 
 				canvas.height = video.videoHeight;
@@ -177,10 +175,10 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
 							<div className="absolute inset-0 pointer-events-none">
 								{/* QR code scanning overlay */}
 								<div className="absolute inset-4 border-2 border-white rounded-lg opacity-50">
-									<div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-blue-500 rounded-tl-lg"></div>
-									<div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-blue-500 rounded-tr-lg"></div>
-									<div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-blue-500 rounded-bl-lg"></div>
-									<div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-blue-500 rounded-br-lg"></div>
+									<div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-blue-500 rounded-tl-lg" />
+									<div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-blue-500 rounded-tr-lg" />
+									<div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-blue-500 rounded-bl-lg" />
+									<div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-blue-500 rounded-br-lg" />
 								</div>
 								<div className="absolute bottom-4 left-4 right-4 text-center">
 									<p className="text-white text-sm bg-black/50 rounded px-2 py-1">

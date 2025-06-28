@@ -424,7 +424,10 @@ export function usePeer() {
 					// Receiving file metadata
 					downloadBuffersRef.current[message.fileId] = {
 						chunks: new Array(message.totalChunks),
-						metadata: { name: message.name, size: parseInt(message.size) },
+						metadata: {
+							name: message.name,
+							size: Number.parseInt(message.size),
+						},
 					};
 					setDownloadProgress((prev) => ({ ...prev, [message.fileId]: 0 }));
 					break;
