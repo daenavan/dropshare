@@ -21,7 +21,7 @@ export function LandingView({
 		<div className="w-full max-w-4xl mx-auto">
 			<div className="text-center mb-8">
 				<p className="text-lg text-muted-foreground">
-					Share files instantly with nearby devices using peer-to-peer
+					Share files directly between devices using secure peer-to-peer
 					technology
 				</p>
 			</div>
@@ -35,8 +35,8 @@ export function LandingView({
 							Share Files
 						</CardTitle>
 						<CardDescription>
-							Start sharing files with others. They can scan your QR code to
-							receive files.
+							Start sharing files with anyone. They can scan your QR code or use
+							your share link to connect.
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
@@ -45,8 +45,8 @@ export function LandingView({
 								<QrCode className="h-16 w-16 text-primary" />
 							</div>
 							<p className="text-sm text-muted-foreground">
-								Your device will generate a QR code that others can scan to
-								connect and download your shared files.
+								Your device will generate a QR code and share link that others
+								can use to connect and download your shared files.
 							</p>
 							<Button onClick={onStartSharing} className="w-full" size="lg">
 								Start Sharing Files
@@ -63,8 +63,8 @@ export function LandingView({
 							Receive Files
 						</CardTitle>
 						<CardDescription>
-							Scan a QR code from another device to connect and download their
-							shared files.
+							Scan a QR code or use a share link to connect and download shared
+							files from another device.
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
@@ -74,7 +74,7 @@ export function LandingView({
 							</div>
 							<p className="text-sm text-muted-foreground">
 								Use your camera to scan a QR code from someone who is sharing
-								files nearby.
+								files with you.
 							</p>
 							<Button
 								onClick={onStartScanning}
@@ -103,13 +103,13 @@ export function LandingView({
 						<div className="w-8 h-8 bg-primary text-primary-foreground rounded-full flex items-center justify-center mx-auto mb-2 text-sm font-bold">
 							2
 						</div>
-						<p>Others scan the QR code to connect directly</p>
+						<p>Others scan the QR code or use the share link to connect</p>
 					</div>
 					<div>
 						<div className="w-8 h-8 bg-primary text-primary-foreground rounded-full flex items-center justify-center mx-auto mb-2 text-sm font-bold">
 							3
 						</div>
-						<p>Files are transferred securely between devices</p>
+						<p>Files are transferred directly and securely between devices</p>
 					</div>
 				</div>
 			</div>

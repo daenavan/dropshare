@@ -1,6 +1,6 @@
 # DropShare
 
-**Hyper-Local P2P File Sharing with End-to-End Encryption**
+**Secure P2P File Sharing with End-to-End Encryption**
 
 DropShare is a secure, private, and easy-to-use peer-to-peer file sharing application that works entirely in your browser. No servers, no sign-ups, just direct connections for fast and secure file transfers.
 

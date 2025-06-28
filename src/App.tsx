@@ -133,7 +133,7 @@ export default function App() {
 			<div className="flex flex-col items-center justify-center w-full">
 				<div className="text-center mb-8">
 					<h1 className="text-4xl font-bold">DropShare</h1>
-					<p className="text-muted-foreground">Hyper-Local P2P File Sharing</p>
+					<p className="text-muted-foreground">Secure P2P File Sharing</p>
 				</div>
 
 				<Suspense fallback={<div>Loading...</div>}>
