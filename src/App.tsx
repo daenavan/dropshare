@@ -1,10 +1,27 @@
-import { useEffect, useState } from "react";
-import { LandingView } from "@/components/LandingView";
-import { QrScanner } from "@/components/QrScanner";
-import { ReceiverView } from "@/components/ReceiverView";
-import { SenderView } from "@/components/SenderView";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { usePeer } from "@/hooks/usePeer";
+
+const LandingView = lazy(() =>
+	import("@/components/LandingView").then((module) => ({
+		default: module.LandingView,
+	})),
+);
+const QrScanner = lazy(() =>
+	import("@/components/QrScanner").then((module) => ({
+		default: module.QrScanner,
+	})),
+);
+const ReceiverView = lazy(() =>
+	import("@/components/ReceiverView").then((module) => ({
+		default: module.ReceiverView,
+	})),
+);
+const SenderView = lazy(() =>
+	import("@/components/SenderView").then((module) => ({
+		default: module.SenderView,
+	})),
+);
 
 export default function App() {
 	const [showScanner, setShowScanner] = useState(false);
@@ -119,14 +136,16 @@ export default function App() {
 					<p className="text-muted-foreground">Hyper-Local P2P File Sharing</p>
 				</div>
 
-				{renderContent()}
+				<Suspense fallback={<div>Loading...</div>}>
+					{renderContent()}
 
-				{showScanner && (
-					<QrScanner
-						onScan={handleQrScan}
-						onClose={() => setShowScanner(false)}
-					/>
-				)}
+					{showScanner && (
+						<QrScanner
+							onScan={handleQrScan}
+							onClose={() => setShowScanner(false)}
+						/>
+					)}
+				</Suspense>
 			</div>
 		</main>
 	);

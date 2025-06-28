@@ -302,32 +302,37 @@ export function usePeer() {
 							);
 
 							if (isValid) {
-								// Mark peer as verified
-								setConnectedPeers((prev) =>
-									prev.map((peer) =>
-										peer.id === conn.peer
-											? {
-													...peer,
-													isVerified: true,
-													sharedKey: peerKeys.sharedKey,
-												}
-											: peer,
-									),
-								);
+								if (isSender) {
+									// Mark peer as verified
+									setConnectedPeers((prev) =>
+										prev.map((peer) =>
+											peer.id === conn.peer
+												? {
+														...peer,
+														isVerified: true,
+														sharedKey: peerKeys.sharedKey,
+													}
+												: peer,
+										),
+									);
 
-								conn.send({ type: "VERIFICATION_COMPLETE" });
-								setConnectionStatus("connected");
+									conn.send({ type: "VERIFICATION_COMPLETE" });
 
-								// Send current files to the verified receiver
-								setSharedFiles((currentFiles) => {
-									const fileManifest = currentFiles.map((sf) => ({
-										id: sf.id,
-										name: sf.file.name,
-										size: sf.file.size,
-									}));
-									conn.send({ type: "FILES_UPDATE", files: fileManifest });
-									return currentFiles;
-								});
+									// Send current files to the verified receiver
+									setSharedFiles((currentFiles) => {
+										const fileManifest = currentFiles.map((sf) => ({
+											id: sf.id,
+											name: sf.file.name,
+											size: sf.file.size,
+										}));
+										conn.send({ type: "FILES_UPDATE", files: fileManifest });
+										return currentFiles;
+									});
+								} else {
+									// This is the receiver side
+									setConnectionStatus("connected");
+									conn.send({ type: "VERIFICATION_COMPLETE" });
+								}
 							} else {
 								console.error("Challenge verification failed");
 								setConnectionStatus("error");
