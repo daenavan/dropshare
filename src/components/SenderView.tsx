@@ -1,7 +1,8 @@
-import { Check, Copy, FileText, QrCode, Trash2, Users } from "lucide-react";
+import { Check, Copy, FileText, QrCode, Users } from "lucide-react";
 import { useState } from "react";
 import { useDropzone } from "react-dropzone";
 import QRCode from "react-qr-code";
+import { FileItem } from "@/components/FileItem";
 import { Button } from "@/components/ui/button";
 import {
 	Card,
@@ -34,7 +35,7 @@ export function SenderView({
 		onDrop: onFilesSelected,
 	});
 
-	const qrValue = peerId ? `${window.location.origin}#${peerId}` : "";
+	const qrValue = peerId ? `${window.location.origin}/dropshare#${peerId}` : "";
 
 	const handleCopyUrl = async () => {
 		try {
@@ -136,31 +137,14 @@ export function SenderView({
 								<ScrollArea className="h-40 w-full">
 									<div className="space-y-2">
 										{sharedFiles.map((sharedFile) => (
-											<div
+											<FileItem
 												key={sharedFile.id}
-												className="flex items-center justify-between p-2 border rounded-lg"
-											>
-												<div className="flex items-center flex-1 min-w-0">
-													<FileText className="h-4 w-4 mr-2 flex-shrink-0" />
-													<div className="flex-1 min-w-0">
-														<p className="text-sm font-medium truncate">
-															{sharedFile.file.name}
-														</p>
-														<p className="text-xs text-muted-foreground">
-															{(sharedFile.file.size / 1024 / 1024).toFixed(2)}{" "}
-															MB
-														</p>
-													</div>
-												</div>
-												<Button
-													variant="ghost"
-													size="sm"
-													onClick={() => onRemoveFile(sharedFile.id)}
-													className="text-destructive hover:text-destructive"
-												>
-													<Trash2 className="h-4 w-4" />
-												</Button>
-											</div>
+												id={sharedFile.id}
+												name={sharedFile.file.name}
+												size={sharedFile.file.size}
+												variant="sender"
+												onRemoveFile={onRemoveFile}
+											/>
 										))}
 									</div>
 								</ScrollArea>

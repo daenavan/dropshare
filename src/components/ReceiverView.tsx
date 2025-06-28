@@ -1,5 +1,5 @@
-import { Download, FileText, Loader2, Wifi } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { FileText, Loader2, Wifi } from "lucide-react";
+import { FileItem } from "@/components/FileItem";
 import {
 	Card,
 	CardContent,
@@ -7,7 +7,6 @@ import {
 	CardHeader,
 	CardTitle,
 } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface ReceiverFile {
@@ -29,10 +28,6 @@ export function ReceiverView({
 	onRequestFile,
 	isConnected,
 }: ReceiverViewProps) {
-	const formatFileSize = (bytes: number) => {
-		return (bytes / 1024 / 1024).toFixed(2) + " MB";
-	};
-
 	const isDownloading = (fileId: string) => {
 		return fileId in downloadProgress;
 	};
@@ -93,46 +88,16 @@ export function ReceiverView({
 									const progress = getDownloadProgress(file.id);
 
 									return (
-										<div
+										<FileItem
 											key={file.id}
-											className="flex items-center justify-between p-4 border rounded-lg"
-										>
-											<div className="flex items-center flex-1 min-w-0 mr-4">
-												<FileText className="h-5 w-5 mr-3 flex-shrink-0 text-muted-foreground" />
-												<div className="flex-1 min-w-0">
-													<p className="font-medium truncate">{file.name}</p>
-													<p className="text-sm text-muted-foreground">
-														{formatFileSize(file.size)}
-													</p>
-													{downloading && (
-														<div className="mt-2">
-															<Progress value={progress} className="h-2" />
-															<p className="text-xs text-muted-foreground mt-1">
-																Downloading... {progress.toFixed(0)}%
-															</p>
-														</div>
-													)}
-												</div>
-											</div>
-											<Button
-												onClick={() => onRequestFile(file.id)}
-												disabled={downloading}
-												size="sm"
-												className="flex-shrink-0"
-											>
-												{downloading ? (
-													<>
-														<Loader2 className="h-4 w-4 mr-2 animate-spin" />
-														Downloading
-													</>
-												) : (
-													<>
-														<Download className="h-4 w-4 mr-2" />
-														Download
-													</>
-												)}
-											</Button>
-										</div>
+											id={file.id}
+											name={file.name}
+											size={file.size}
+											variant="receiver"
+											isDownloading={downloading}
+											downloadProgress={progress}
+											onRequestFile={onRequestFile}
+										/>
 									);
 								})}
 							</div>

@@ -60,7 +60,10 @@ export function usePeer() {
 	const peerRef = useRef<Peer | null>(null);
 	const senderConnectionRef = useRef<DataConnection | null>(null);
 	const downloadBuffersRef = useRef<
-		Record<string, { chunks: ArrayBuffer[]; metadata: any }>
+		Record<
+			string,
+			{ chunks: ArrayBuffer[]; metadata: { name: string; size: number } }
+		>
 	>({});
 
 	const sendFileToReceiver = useCallback(
