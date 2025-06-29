@@ -1,8 +1,19 @@
-import { Check, Copy, FileText, QrCode, Users, X } from "lucide-react";
+import {
+	AlertCircle,
+	Check,
+	Copy,
+	FileText,
+	Info,
+	QrCode,
+	Share2,
+	Users,
+	X,
+} from "lucide-react";
 import { useState } from "react";
 import { useDropzone } from "react-dropzone";
 import QRCode from "react-qr-code";
 import { FileItem } from "@/components/FileItem";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
 	Card,
@@ -12,7 +23,14 @@ import {
 	CardTitle,
 } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { ConnectedPeer, SharedFile } from "@/hooks/usePeer";
+import { useWindowSize } from "@/hooks/useWindowSize";
 
 interface SenderViewProps {
 	peerId: string | null;
@@ -32,6 +50,9 @@ export function SenderView({
 	onRemovePeer,
 }: SenderViewProps) {
 	const [copySuccess, setCopySuccess] = useState(false);
+	const [shareError, setShareError] = useState<string | null>(null);
+	const { isMobile } = useWindowSize();
+	const isShareSupported = isMobile && "share" in navigator;
 
 	const { getRootProps, getInputProps, isDragActive } = useDropzone({
 		onDrop: onFilesSelected,
@@ -46,6 +67,28 @@ export function SenderView({
 			setTimeout(() => setCopySuccess(false), 2000);
 		} catch (err) {
 			console.error("Failed to copy URL:", err);
+		}
+	};
+
+	const handleShare = async () => {
+		setShareError(null);
+		if (isShareSupported) {
+			try {
+				await navigator.share({
+					title: "DropShare Connection",
+					text: "Connect to my DropShare to receive files.",
+					url: qrValue,
+				});
+			} catch (err) {
+				if (err instanceof Error && err.name !== "AbortError") {
+					console.error("Failed to share:", err);
+					setShareError("Something went wrong. Could not open share dialog.");
+				}
+			}
+		} else {
+			setShareError(
+				"Share feature is not supported on your browser or device.",
+			);
 		}
 	};
 
@@ -74,24 +117,60 @@ export function SenderView({
 									className="text-foreground"
 								/>
 							</div>
-							<Button
-								onClick={handleCopyUrl}
-								variant="outline"
-								className="w-full max-w-xs"
-								disabled={copySuccess}
-							>
-								{copySuccess ? (
-									<>
-										<Check className="mr-2 h-4 w-4" />
-										Copied!
-									</>
-								) : (
-									<>
-										<Copy className="mr-2 h-4 w-4" />
-										Copy Connection URL
-									</>
+							<div className="w-full max-w-xs space-y-2">
+								<div className="flex flex-col sm:flex-row gap-2">
+									<Button
+										onClick={handleCopyUrl}
+										variant="outline"
+										className="flex-1"
+										disabled={copySuccess}
+									>
+										{copySuccess ? (
+											<>
+												<Check className="mr-2 h-4 w-4" />
+												Copied!
+											</>
+										) : (
+											<>
+												<Copy className="mr-2 h-4 w-4" />
+												Copy URL
+											</>
+										)}
+									</Button>
+									{isMobile && (
+										<div className="flex-1 flex items-center gap-2">
+											<Button
+												onClick={handleShare}
+												className="flex-1"
+												disabled={!isShareSupported}
+											>
+												<Share2 className="mr-2 h-4 w-4" />
+												Share Link
+											</Button>
+											{!isShareSupported && (
+												<TooltipProvider>
+													<Tooltip>
+														<TooltipTrigger>
+															<Info className="h-5 w-5 text-muted-foreground" />
+														</TooltipTrigger>
+														<TooltipContent>
+															<p>
+																Share feature is not supported on this device.
+															</p>
+														</TooltipContent>
+													</Tooltip>
+												</TooltipProvider>
+											)}
+										</div>
+									)}
+								</div>
+								{shareError && (
+									<Alert variant="destructive">
+										<AlertCircle className="h-4 w-4" />
+										<AlertDescription>{shareError}</AlertDescription>
+									</Alert>
 								)}
-							</Button>
+							</div>
 						</div>
 					) : (
 						<div className="flex items-center justify-center h-52 text-muted-foreground">

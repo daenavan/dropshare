@@ -1,4 +1,6 @@
+import { Github } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { usePeer } from "@/hooks/usePeer";
 
@@ -127,7 +129,16 @@ export default function App() {
 
 	return (
 		<main className="min-h-screen bg-background text-foreground flex flex-col items-center justify-center p-4 w-full">
-			<div className="absolute top-4 right-4">
+			<div className="absolute top-4 right-4 flex items-center gap-2">
+				<Button variant="ghost" size="icon" asChild aria-label="View on GitHub">
+					<a
+						href="https://github.com/daenavan/dropshare"
+						target="_blank"
+						rel="noopener noreferrer"
+					>
+						<Github className="h-4 w-4" />
+					</a>
+				</Button>
 				<ThemeToggle />
 			</div>
 			<div className="flex flex-col items-center justify-center w-full">
