@@ -108,13 +108,17 @@ export function SenderView({
 				<CardContent>
 					{peerId ? (
 						<div className="flex flex-col items-center space-y-4">
-							<div className="p-4 bg-background border rounded-lg">
+							{/* Always rendered dark-on-light with a quiet zone: an
+							    inverted (light-on-dark) code is unreadable for many
+							    scanners, including the browser camera. */}
+							<div className="p-5 bg-white rounded-xl border border-neutral-200">
 								<QRCode
 									value={qrValue}
-									size={200}
-									bgColor="transparent"
-									fgColor="currentColor"
-									className="text-foreground"
+									size={220}
+									level="M"
+									bgColor="#ffffff"
+									fgColor="#0a0a0a"
+									aria-label="Connection QR code"
 								/>
 							</div>
 							<div className="w-full max-w-xs space-y-2">

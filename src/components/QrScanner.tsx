@@ -9,41 +9,137 @@ interface QrScannerProps {
 	onClose: () => void;
 }
 
+// Only the centre square of the camera frame is decoded: it is what the guide
+// box points at, and it keeps every decode pass small on high-resolution
+// streams (phones and tablets hand out 1080p+ by default).
+const SCAN_REGION_FRACTION = 0.8;
+const MAX_SCAN_DIM = 720;
+const SCAN_INTERVAL_MS = 100; // ~10 decodes/second keeps the preview smooth
+
+const CAMERA_CONSTRAINTS: MediaStreamConstraints[] = [
+	// Ask for a moderate resolution: full-sensor frames make jsQR slow enough
+	// to miss the code entirely on a tablet.
+	{
+		video: {
+			facingMode: { ideal: "environment" },
+			width: { ideal: 1280 },
+			height: { ideal: 720 },
+		},
+	},
+	{ video: { facingMode: { ideal: "environment" } } }, // back camera preferred
+	{ video: { facingMode: { ideal: "user" } } }, // front camera fallback
+	{ video: true }, // any camera
+];
+
+function cameraErrorMessage(err: unknown): string {
+	if (err instanceof Error) {
+		switch (err.name) {
+			case "NotAllowedError":
+			case "SecurityError":
+				return "Camera access denied. Please allow camera permissions and try again.";
+			case "NotFoundError":
+			case "OverconstrainedError":
+				return "No usable camera found on this device.";
+			case "NotReadableError":
+			case "TrackStartError":
+				return "The camera is already in use by another app. Close it and try again.";
+			case "NotSupportedError":
+				return "Camera not supported on this device.";
+			default:
+				return err.message;
+		}
+	}
+	return "Failed to access camera. Please check your permissions.";
+}
+
 export function QrScanner({ onScan, onClose }: QrScannerProps) {
 	const videoRef = useRef<HTMLVideoElement>(null);
 	const canvasRef = useRef<HTMLCanvasElement>(null);
-	const animationFrameId = useRef<number>(0);
+	const onScanRef = useRef(onScan);
+	const didScanRef = useRef(false);
 	const [error, setError] = useState<string>("");
 	const [isLoading, setIsLoading] = useState(true);
 
+	// The scan loop calls the newest callback through a ref, so a re-render of
+	// the parent never tears down and restarts the camera.
 	useEffect(() => {
-		let stream: MediaStream;
+		onScanRef.current = onScan;
+	}, [onScan]);
 
-		const tick = () => {
-			if (
-				videoRef.current &&
-				videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA
-			) {
-				const canvas = canvasRef.current!;
-				const video = videoRef.current;
-				const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+	useEffect(() => {
+		let stream: MediaStream | null = null;
+		let animationFrameId = 0;
+		let lastScanAt = 0;
+		let cancelled = false;
 
-				canvas.height = video.videoHeight;
-				canvas.width = video.videoWidth;
-				ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-				const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-				const code = jsQR(imageData.data, imageData.width, imageData.height, {
-					inversionAttempts: "dontInvert",
-				});
-
-				if (code) {
-					onScan(code.data);
-				} else {
-					animationFrameId.current = requestAnimationFrame(tick);
+		const stopStream = () => {
+			if (stream) {
+				for (const track of stream.getTracks()) {
+					track.stop();
 				}
-			} else {
-				animationFrameId.current = requestAnimationFrame(tick);
+				stream = null;
+			}
+		};
+
+		const scanFrame = () => {
+			const video = videoRef.current;
+			const canvas = canvasRef.current;
+			if (!video || !canvas) return;
+
+			const videoWidth = video.videoWidth;
+			const videoHeight = video.videoHeight;
+			if (!videoWidth || !videoHeight) return;
+
+			// Crop the centre square, only shrinking it when the stream is huge:
+			// the code keeps its native resolution but jsQR analyses ~6x fewer
+			// pixels than it would for a full 1080p frame.
+			const region = Math.min(videoWidth, videoHeight) * SCAN_REGION_FRACTION;
+			const size = Math.round(Math.min(region, MAX_SCAN_DIM));
+			canvas.width = size;
+			canvas.height = size;
+
+			const ctx = canvas.getContext("2d", { willReadFrequently: true });
+			if (!ctx) return;
+
+			ctx.drawImage(
+				video,
+				(videoWidth - region) / 2,
+				(videoHeight - region) / 2,
+				region,
+				region,
+				0,
+				0,
+				size,
+				size,
+			);
+
+			const imageData = ctx.getImageData(0, 0, size, size);
+			// "attemptBoth" also decodes QRs drawn light-on-dark, such as the
+			// one the dark theme renders or another app's inverted code.
+			const code = jsQR(imageData.data, size, size, {
+				inversionAttempts: "attemptBoth",
+			});
+
+			if (code?.data) {
+				didScanRef.current = true;
+				onScanRef.current(code.data);
+			}
+		};
+
+		const tick = (timestamp: number) => {
+			if (cancelled || didScanRef.current) return;
+			animationFrameId = requestAnimationFrame(tick);
+
+			const video = videoRef.current;
+			if (!video || video.readyState < video.HAVE_CURRENT_DATA) return;
+			if (timestamp - lastScanAt < SCAN_INTERVAL_MS) return;
+
+			lastScanAt = timestamp;
+			try {
+				scanFrame();
+			} catch (err) {
+				// One bad frame must never kill the scan loop.
+				console.error("QR scan failed for this frame:", err);
 			}
 		};
 
@@ -51,6 +147,10 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
 			try {
 				setIsLoading(true);
 				setError("");
+
+				if (!navigator.mediaDevices?.getUserMedia) {
+					throw new Error("Camera access is not available in this browser.");
+				}
 
 				// Check if we're on HTTPS (required for camera access)
 				if (
@@ -62,71 +162,60 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
 					);
 				}
 
-				// Try different camera configurations
-				const constraints = [
-					{ video: { facingMode: "environment" } }, // Back camera preferred
-					{ video: { facingMode: "user" } }, // Front camera fallback
-					{ video: true }, // Any camera
-				];
-
-				let cameraStream: MediaStream | null = null;
-
-				for (const constraint of constraints) {
+				for (const constraint of CAMERA_CONSTRAINTS) {
 					try {
-						cameraStream =
-							await navigator.mediaDevices.getUserMedia(constraint);
+						stream = await navigator.mediaDevices.getUserMedia(constraint);
 						break;
 					} catch (err) {
 						console.warn("Failed camera constraint:", constraint, err);
 					}
 				}
 
-				if (!cameraStream) {
+				if (!stream) {
 					throw new Error(
 						"No camera could be accessed. Please check your camera permissions.",
 					);
 				}
 
-				stream = cameraStream;
-				if (videoRef.current) {
-					videoRef.current.srcObject = stream;
-					await videoRef.current.play();
-					setIsLoading(false);
-					animationFrameId.current = requestAnimationFrame(tick);
+				// Unmounted (or restarted) while the permission prompt was open:
+				// release the camera instead of leaking a live stream.
+				if (cancelled) {
+					stopStream();
+					return;
 				}
+
+				const video = videoRef.current;
+				if (!video) {
+					stopStream();
+					return;
+				}
+
+				video.srcObject = stream;
+				await video.play();
+
+				if (cancelled) return;
+				setIsLoading(false);
+				animationFrameId = requestAnimationFrame(tick);
 			} catch (err) {
 				console.error("Camera access error:", err);
+				if (cancelled) return;
 				setIsLoading(false);
-
-				if (err instanceof Error) {
-					if (err.name === "NotAllowedError") {
-						setError(
-							"Camera access denied. Please allow camera permissions and try again.",
-						);
-					} else if (err.name === "NotFoundError") {
-						setError("No camera found on this device.");
-					} else if (err.name === "NotSupportedError") {
-						setError("Camera not supported on this device.");
-					} else {
-						setError(err.message);
-					}
-				} else {
-					setError("Failed to access camera. Please check your permissions.");
-				}
+				setError(cameraErrorMessage(err));
 			}
 		};
 
 		startCamera();
 
 		return () => {
-			if (animationFrameId.current) {
-				cancelAnimationFrame(animationFrameId.current);
-			}
-			if (stream) {
-				stream.getTracks().forEach((track) => track.stop());
+			cancelled = true;
+			cancelAnimationFrame(animationFrameId);
+			stopStream();
+			const video = videoRef.current;
+			if (video) {
+				video.srcObject = null;
 			}
 		};
-	}, [onScan]);
+	}, []);
 
 	return (
 		<div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
@@ -152,6 +241,16 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
 					</div>
 				) : (
 					<>
+						<video
+							ref={videoRef}
+							className="w-full h-auto rounded-lg bg-black"
+							autoPlay
+							playsInline
+							muted
+							aria-label="Camera feed for QR scanning"
+						/>
+						<canvas ref={canvasRef} className="hidden" />
+
 						{isLoading && (
 							<div className="absolute inset-0 bg-black/50 flex items-center justify-center rounded-lg z-10">
 								<div className="text-white text-center">
@@ -160,25 +259,17 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
 								</div>
 							</div>
 						)}
-						<video
-							ref={videoRef}
-							className="w-full h-auto rounded-lg"
-							playsInline
-							muted
-							aria-label="Camera feed for QR scanning"
-						>
-							<track kind="captions" srcLang="en" label="English captions" />
-						</video>
-						<canvas ref={canvasRef} className="hidden" />
 
 						{!isLoading && (
 							<div className="absolute inset-0 pointer-events-none">
-								{/* QR code scanning overlay */}
-								<div className="absolute inset-4 border-2 border-white rounded-lg opacity-50">
-									<div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-blue-500 rounded-tl-lg" />
-									<div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-blue-500 rounded-tr-lg" />
-									<div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-blue-500 rounded-bl-lg" />
-									<div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-blue-500 rounded-br-lg" />
+								{/* Guide box marks the region that is actually decoded */}
+								<div className="absolute inset-0 flex items-center justify-center">
+									<div className="relative h-[80%] max-w-full aspect-square rounded-lg border-2 border-white/40">
+										<div className="absolute -top-px -left-px w-6 h-6 border-t-4 border-l-4 border-blue-500 rounded-tl-lg" />
+										<div className="absolute -top-px -right-px w-6 h-6 border-t-4 border-r-4 border-blue-500 rounded-tr-lg" />
+										<div className="absolute -bottom-px -left-px w-6 h-6 border-b-4 border-l-4 border-blue-500 rounded-bl-lg" />
+										<div className="absolute -bottom-px -right-px w-6 h-6 border-b-4 border-r-4 border-blue-500 rounded-br-lg" />
+									</div>
 								</div>
 								<div className="absolute bottom-4 left-4 right-4 text-center">
 									<p className="text-white text-sm bg-black/50 rounded px-2 py-1">
@@ -194,7 +285,7 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
 					onClick={onClose}
 					variant="destructive"
 					size="icon"
-					className="absolute top-2 right-2 pointer-events-auto"
+					className="absolute top-2 right-2 z-20 pointer-events-auto"
 				>
 					<X className="h-4 w-4" />
 				</Button>
