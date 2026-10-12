@@ -68,30 +68,15 @@ DropShare connects devices directly (peer-to-peer), so both devices have to be a
 *   **Turn off VPNs and private DNS** on both devices while connecting — they often route around the local network.
 *   **Nothing to install:** the connection is set up through a public signalling server (`0.peerjs.com`). If it is unreachable, both pages will say so.
 
-## 🌐 TURN Relay (Optional but Recommended)
+## 🌐 Connection Path: Direct First, Relay as Fallback
 
-On most networks DropShare connects directly, using STUN to discover each other. When the network blocks device-to-device traffic (client isolation, guest Wi-Fi) or the devices are on different networks, a [TURN](https://en.wikipedia.org/wiki/Traversal_Using_Relays_around_NAT) relay lets the two peers meet through a server in the middle. Transfers stay end-to-end encrypted either way — the relay only sees encrypted chunks.
+DropShare prefers a direct peer-to-peer connection: when the two devices can reach each other — typically on the same Wi-Fi — the bytes never touch a server. STUN is used to discover each other's addresses.
 
-Set these when building (they are inlined into the bundle):
+Some networks make a direct route impossible: Wi-Fi client isolation, guest networks, routers without NAT hairpin support, symmetric NAT. For those, DropShare falls back to a [TURN](https://en.wikipedia.org/wiki/Traversal_Using_Relays_around_NAT) relay — the public, signup-free one from the [elixir-webrtc project](https://github.com/elixir-webrtc/turn-server). Its short-lived credentials are fetched at connection time, so there is nothing to build, configure or deploy.
 
-| Variable | Example | Description |
-| --- | --- | --- |
-| `VITE_TURN_URL` | `turn:turn.example.com:3478?transport=udp,turns:turn.example.com:5349` | Comma-separated TURN URL(s) |
-| `VITE_TURN_USERNAME` | `dropuser` | TURN username (optional) |
-| `VITE_TURN_CREDENTIAL` | `supersecret` | TURN password (optional) |
+**What the relay can see:** connection metadata (the two IP addresses and the volume of traffic) — never your files. WebRTC always encrypts DataChannels with DTLS between the two devices, and DropShare additionally encrypts every file chunk with AES-GCM using a key established through an ECDH exchange, so the relay only forwards ciphertext.
 
-Locally, put them in a `.env` file in the project root:
-
-```bash
-VITE_TURN_URL=turn:turn.example.com:3478?transport=udp
-VITE_TURN_USERNAME=dropuser
-VITE_TURN_CREDENTIAL=supersecret
-```
-
-For the GitHub Pages deployment, add `VITE_TURN_URL`, `VITE_TURN_USERNAME` and
-`VITE_TURN_CREDENTIAL` as repository secrets — the deploy workflow passes them to
-the build. Any TURN server works; [coturn](https://github.com/coturn/coturn) is
-the common self-hosted choice.
+If the relay service is unreachable, DropShare still tries direct connections and reports what failed.
 
 ## 🛠️ Tech Stack
 

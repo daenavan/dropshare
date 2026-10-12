@@ -21,9 +21,11 @@ import {
 	verifyChallenge,
 } from "@/lib/crypto";
 import {
+	applyIceServers,
 	buildIceServers,
 	connectionErrorMessage,
 	connectionHint,
+	ensureTurnServer,
 } from "@/lib/peerConfig";
 import { type PeerKeys, usePeerStore } from "@/store/peerStore";
 
@@ -156,8 +158,16 @@ export function usePeer() {
 		async (sharedFile: SharedFile, conn: DataConnection) => {
 			const { file, id } = sharedFile;
 			const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-			const peerKeys = usePeerStore.getState().peerKeys[conn.peer];
-			const useEncryption = peerKeys?.sharedKey !== undefined;
+			const sharedKey = usePeerStore.getState().peerKeys[conn.peer]?.sharedKey;
+
+			// Fail closed: file chunks are only ever sent AES-GCM encrypted, so
+			// refuse the transfer instead of putting plaintext on the wire.
+			if (!sharedKey) {
+				console.error(
+					"Refusing to send a file without a shared encryption key",
+				);
+				return;
+			}
 
 			// Send metadata first
 			conn.send({
@@ -166,7 +176,7 @@ export function usePeer() {
 				name: file.name,
 				size: file.size.toString(),
 				totalChunks,
-				encrypted: useEncryption,
+				encrypted: true,
 			});
 
 			// Send file in chunks
@@ -174,36 +184,23 @@ export function usePeer() {
 				const start = i * CHUNK_SIZE;
 				const end = Math.min(start + CHUNK_SIZE, file.size);
 				const chunk = file.slice(start, end);
-				let arrayBuffer = await chunk.arrayBuffer();
-				let iv: string | undefined;
+				const arrayBuffer = await chunk.arrayBuffer();
 
-				// Encrypt chunk if we have a shared key
-				if (useEncryption && peerKeys?.sharedKey) {
-					try {
-						const encryptedData = await encryptData(
-							arrayBuffer,
-							peerKeys.sharedKey,
-						);
-						arrayBuffer = encryptedData.data;
-						iv = arrayBufferToBase64(encryptedData.iv);
-					} catch (error) {
-						console.error("Failed to encrypt chunk:", error);
-						// Fall back to unencrypted
-						if (useEncryption) {
-							console.warn("Falling back to unencrypted transmission");
-						}
-					}
+				try {
+					const encryptedData = await encryptData(arrayBuffer, sharedKey);
+					conn.send({
+						type: "FILE_CHUNK",
+						fileId: id,
+						chunkIndex: i,
+						data: encryptedData.data,
+						isLast: i === totalChunks - 1,
+						encrypted: true,
+						iv: arrayBufferToBase64(encryptedData.iv),
+					});
+				} catch (error) {
+					console.error("Failed to encrypt chunk, aborting transfer:", error);
+					return;
 				}
-
-				conn.send({
-					type: "FILE_CHUNK",
-					fileId: id,
-					chunkIndex: i,
-					data: arrayBuffer,
-					isLast: i === totalChunks - 1,
-					encrypted: useEncryption,
-					iv,
-				});
 
 				// Small delay to prevent overwhelming the connection
 				await new Promise((resolve) => setTimeout(resolve, 10));
@@ -496,36 +493,32 @@ export function usePeer() {
 					if (fileBuffer) {
 						// Ensure we don't process the same chunk twice
 						if (fileBuffer.chunks[message.chunkIndex] === undefined) {
-							let chunkData = message.data;
+							const sharedKey =
+								usePeerStore.getState().peerKeys[
+									usePeerStore.getState().senderConnection?.peer || ""
+								]?.sharedKey;
 
-							// Decrypt chunk if it's encrypted
-							if (
-								message.encrypted &&
-								message.iv &&
-								usePeerStore.getState().senderConnection
-							) {
-								const currentPeerKeys =
-									usePeerStore.getState().peerKeys[
-										usePeerStore.getState().senderConnection?.peer || ""
-									];
-								if (currentPeerKeys?.sharedKey) {
-									try {
-										const encryptedData: EncryptedData = {
-											data: message.data,
-											iv: base64ToArrayBuffer(message.iv),
-										};
-										chunkData = await decryptData(
-											encryptedData,
-											currentPeerKeys.sharedKey,
-										);
-									} catch (error) {
-										console.error("Failed to decrypt chunk:", error);
-										// Use encrypted data as fallback (will likely be corrupted)
-									}
+							// Senders always encrypt chunks with AES-GCM, which also
+							// authenticates them: an unencrypted or corrupted chunk is
+							// refused instead of being saved as if it were file data.
+							if (!message.encrypted || !message.iv || !sharedKey) {
+								console.error(
+									"Refusing an unencrypted or unverifiable file chunk",
+								);
+							} else {
+								try {
+									const encryptedData: EncryptedData = {
+										data: message.data,
+										iv: base64ToArrayBuffer(message.iv),
+									};
+									fileBuffer.chunks[message.chunkIndex] = await decryptData(
+										encryptedData,
+										sharedKey,
+									);
+								} catch (error) {
+									console.error("Failed to decrypt chunk:", error);
 								}
 							}
-
-							fileBuffer.chunks[message.chunkIndex] = chunkData;
 						}
 
 						const received = fileBuffer.chunks.filter(
@@ -641,6 +634,12 @@ export function usePeer() {
 				config: { iceServers: buildIceServers() },
 			});
 			peerRef.current = peer;
+
+			// Relay credentials arrive asynchronously; apply them once they do so
+			// that connections opened afterwards can fall back to the relay.
+			void ensureTurnServer().then(() => {
+				if (isCurrent()) applyIceServers(peer);
+			});
 
 			peer.on("open", (id) => {
 				if (!isCurrent()) return;
@@ -902,6 +901,13 @@ export function usePeer() {
 				);
 				return;
 			}
+
+			// Fetch relay credentials before building the offer so the connection
+			// can fall back to TURN when no direct route exists.
+			await ensureTurnServer();
+			if (attempt.canceled) return;
+			applyIceServers(peer);
+
 			if (senderId === peer.id) {
 				failAttempt(
 					attempt,
