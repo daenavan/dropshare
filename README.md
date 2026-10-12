@@ -78,6 +78,8 @@ Some networks make a direct route impossible: Wi-Fi client isolation, guest netw
 
 If the relay service is unreachable, DropShare still tries direct connections and reports what failed.
 
+The relay is a single community-run service, so a scheduled workflow (`.github/workflows/turn-health.yml`) probes it daily and fails if it stops handing out credentials or refuses allocations. Run the same probe locally with `bun run check:turn`.
+
 ## 🛠️ Tech Stack
 
 *   **Framework:** [React](https://react.dev/) 19 with [Vite](https://vitejs.dev/) 7

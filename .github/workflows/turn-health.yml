@@ -1,0 +1,30 @@
+# Daily probe of the public TURN relay DropShare relies on.
+#
+# The relay is a single community-run service (see README), so a failure there
+# would otherwise only be noticed by a user whose network needs the relay.
+# The job fails when the relay stops handing out credentials or refuses
+# allocations, which surfaces in the Actions tab.
+name: TURN relay health
+
+on:
+  schedule:
+    # Daily at 06:17 UTC — off the hour to avoid peak cron load.
+    - cron: '17 6 * * *'
+  # Allows running the probe manually from the Actions tab.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Probe the public TURN relay
+        run: bun scripts/check-turn.mjs
