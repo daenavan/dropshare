@@ -20,6 +20,11 @@ import {
 	signChallenge,
 	verifyChallenge,
 } from "@/lib/crypto";
+import {
+	buildIceServers,
+	connectionErrorMessage,
+	connectionHint,
+} from "@/lib/peerConfig";
 import { type PeerKeys, usePeerStore } from "@/store/peerStore";
 
 // Represents a connected peer (receiver)
@@ -49,6 +54,7 @@ export type PeerMessage =
 	| { type: "CHALLENGE"; challenge: string }
 	| { type: "CHALLENGE_RESPONSE"; signature: string }
 	| { type: "VERIFICATION_COMPLETE" }
+	| { type: "VERIFICATION_FAILED" }
 	| { type: "DISCONNECTED" }
 	| {
 			type: "FILES_UPDATE";
@@ -75,6 +81,30 @@ export type PeerMessage =
 
 const CHUNK_SIZE = 64 * 1024; // 64KB chunks
 
+// How long a connection may take to open before the user is told it failed.
+const CONNECT_TIMEOUT_MS = 20000;
+// How long the security handshake may take once the connection is open.
+const HANDSHAKE_TIMEOUT_MS = 15000;
+// How long to wait for our own signalling socket before giving up.
+const PEER_READY_TIMEOUT_MS = 12000;
+// Grace period before an interrupted ("disconnected") link is called lost.
+const ICE_LOST_GRACE_MS = 8000;
+
+type ConnectionStatus =
+	| "connecting"
+	| "verifying"
+	| "connected"
+	| "error"
+	| "disconnected";
+
+interface ConnectionAttempt {
+	senderId: string;
+	canceled: boolean;
+	connection: DataConnection | null;
+	connectTimer: ReturnType<typeof setTimeout> | null;
+	handshakeTimer: ReturnType<typeof setTimeout> | null;
+}
+
 export function usePeer() {
 	const [peerId, setPeerId] = useState<string | null>(null);
 	const [sharedFiles, setSharedFiles] = useState<SharedFile[]>([]);
@@ -86,11 +116,23 @@ export function usePeer() {
 		Record<string, number>
 	>({});
 	const [isConnected, setIsConnected] = useState<boolean>(false);
-	const [connectionStatus, setConnectionStatus] = useState<
-		"connecting" | "verifying" | "connected" | "error" | "disconnected"
-	>("connecting");
+	const [connectionStatus, setConnectionStatus] =
+		useState<ConnectionStatus>("connecting");
+	const [connectionError, setConnectionError] = useState<string | null>(null);
+	// Sender side: false while we have no signalling socket (the QR may be stale).
+	const [isSignalingConnected, setIsSignalingConnected] = useState(false);
+	const [signalingError, setSignalingError] = useState<string | null>(null);
 
 	const peerRef = useRef<Peer | null>(null);
+	// Lets connectToSender() spin up a replacement peer if the socket died.
+	const createPeerRef = useRef<(() => Peer) | null>(null);
+	// The in-flight connection attempt, so retries/failures can cancel it.
+	const attemptRef = useRef<ConnectionAttempt | null>(null);
+	// Remembered so "Retry" can reconnect to the same sender.
+	const lastSenderIdRef = useRef<string | null>(null);
+	const handlePeerMessageRef = useRef<
+		((message: PeerMessage, conn: DataConnection) => void) | null
+	>(null);
 	const downloadBuffersRef = useRef<
 		Record<
 			string,
@@ -374,6 +416,8 @@ export function usePeer() {
 							} else {
 								console.error("Challenge verification failed");
 								setConnectionStatus("error");
+								// Let the receiver know instead of leaving it verifying forever
+								conn.send({ type: "VERIFICATION_FAILED" });
 							}
 
 							// Cleanup challenge
@@ -387,8 +431,22 @@ export function usePeer() {
 				}
 
 				case "VERIFICATION_COMPLETE": {
+					const attempt = attemptRef.current;
+					if (attempt?.handshakeTimer) {
+						clearTimeout(attempt.handshakeTimer);
+						attempt.handshakeTimer = null;
+					}
+					setConnectionError(null);
 					setConnectionStatus("connected");
 					setIsConnected(true);
+					break;
+				}
+
+				case "VERIFICATION_FAILED": {
+					setConnectionStatus("error");
+					setConnectionError(
+						"The security check with the sender failed. Please connect again.",
+					);
 					break;
 				}
 
@@ -513,6 +571,11 @@ export function usePeer() {
 		],
 	);
 
+	// Keep the peer's message handler current without re-creating the peer.
+	useEffect(() => {
+		handlePeerMessageRef.current = handlePeerMessage;
+	}, [handlePeerMessage]);
+
 	// Initialize crypto keys
 	useEffect(() => {
 		const initializeCrypto = () => {
@@ -528,51 +591,179 @@ export function usePeer() {
 		initializeCrypto();
 	}, [setCryptoKeys]);
 
-	// Initialize PeerJS
+	// Initialize PeerJS. The signalling socket lives longer than a page view on
+	// phones and tablets: it drops when the device sleeps or the tab is
+	// throttled, which used to leave a stale QR code on screen and receivers
+	// stuck on "connecting". Reconnect in place, and re-create the peer (new id,
+	// so the QR code refreshes by itself) only when the socket is gone for good.
 	useEffect(() => {
-		const peer = new Peer({
-			config: {
-				iceServers: [
-					// Google's free STUN servers
-					{ urls: "stun:stun.l.google.com:19302" },
-					{ urls: "stun:stun1.l.google.com:19302" },
-					{ urls: "stun:stun2.l.google.com:19302" },
-					{ urls: "stun:stun3.l.google.com:19302" },
-					{ urls: "stun:stun4.l.google.com:19302" },
-				],
-			},
-		});
-		peerRef.current = peer;
+		let recreateTimer: ReturnType<typeof setTimeout> | null = null;
+		let recreateAttempts = 0;
+		let generation = 0;
+		let disposed = false;
 
-		peer.on("open", (id) => {
-			setPeerId(id);
-		});
+		const scheduleRecreate = () => {
+			if (disposed || recreateTimer) return;
+			recreateAttempts += 1;
+			const delay = Math.min(2000 * 2 ** (recreateAttempts - 1), 30000);
+			console.info(
+				`Signalling server unavailable, retrying in ${delay}ms (attempt ${recreateAttempts})`,
+			);
+			recreateTimer = setTimeout(() => {
+				recreateTimer = null;
+				createPeer();
+			}, delay);
+		};
 
-		peer.on("connection", (conn) => {
-			const handleDisconnect = () => {
-				setConnectedPeers((prev) => prev.filter((p) => p.id !== conn.peer));
-			};
+		const failActiveAttempt = (message: string) => {
+			const attempt = attemptRef.current;
+			if (!attempt || attempt.canceled) return;
+			attempt.canceled = true;
+			if (attempt.connectTimer) clearTimeout(attempt.connectTimer);
+			if (attempt.handshakeTimer) clearTimeout(attempt.handshakeTimer);
+			attempt.connection?.close();
+			attemptRef.current = null;
+			setConnectionStatus("error");
+			setConnectionError(message);
+		};
 
-			conn.on("open", () => {
-				// Wait for hello message to get the peer's name
+		const createPeer = (): Peer => {
+			// Bumping the generation first retires the previous peer's handlers:
+			// destroy() fires its "close" event, which would otherwise look like a
+			// lost socket and re-create peers in a loop.
+			const myGeneration = ++generation;
+			const isCurrent = () => generation === myGeneration && !disposed;
+
+			const previous = peerRef.current;
+			if (previous && !previous.destroyed) previous.destroy();
+
+			const peer = new Peer({
+				config: { iceServers: buildIceServers() },
+			});
+			peerRef.current = peer;
+
+			peer.on("open", (id) => {
+				if (!isCurrent()) return;
+				recreateAttempts = 0;
+				setPeerId(id);
+				setIsSignalingConnected(true);
+				setSignalingError(null);
 			});
 
-			conn.on("data", (data) => {
-				handlePeerMessage(data as PeerMessage, conn);
+			peer.on("connection", (conn) => {
+				if (!isCurrent()) return;
+
+				const handleDisconnect = () => {
+					setConnectedPeers((prev) => prev.filter((p) => p.id !== conn.peer));
+				};
+
+				conn.on("open", () => {
+					// Wait for hello message to get the peer's name
+				});
+
+				conn.on("data", (data) => {
+					handlePeerMessageRef.current?.(data as PeerMessage, conn);
+				});
+
+				conn.on("close", handleDisconnect);
+				conn.on("error", handleDisconnect);
 			});
 
-			conn.on("close", handleDisconnect);
-			conn.on("error", handleDisconnect);
-		});
+			peer.on("disconnected", () => {
+				if (!isCurrent()) return;
+				setIsSignalingConnected(false);
+				// Keep the same id so the QR code on screen stays valid
+				try {
+					peer.reconnect();
+				} catch (error) {
+					console.error("Failed to reconnect to the signalling server:", error);
+					scheduleRecreate();
+				}
+			});
 
-		peer.on("error", (error) => {
-			console.error("PeerJS error:", error);
-		});
+			peer.on("close", () => {
+				if (!isCurrent()) return;
+				setIsSignalingConnected(false);
+				scheduleRecreate();
+			});
+
+			peer.on("error", (error) => {
+				if (!isCurrent()) return;
+				console.error("PeerJS error:", error);
+				const type = (error as { type?: string }).type;
+
+				switch (type) {
+					case "peer-unavailable":
+						// Only the receiver creates outgoing connections
+						failActiveAttempt(connectionErrorMessage(error));
+						break;
+					case "unavailable-id":
+						// Someone else took the id: get a new one (and a new QR code)
+						console.warn("Peer id unavailable, requesting a new one");
+						setIsSignalingConnected(false);
+						scheduleRecreate();
+						break;
+					case "network":
+					case "socket-error":
+					case "socket-closed":
+					case "server-error":
+						setIsSignalingConnected(false);
+						setSignalingError(
+							"Lost connection to the connection service. Reconnecting…",
+						);
+						scheduleRecreate();
+						break;
+					case "browser-incompatible":
+					case "webrtc":
+					case "ssl-unavailable":
+					case "invalid-key":
+						setIsSignalingConnected(false);
+						setSignalingError(connectionErrorMessage(error));
+						break;
+					default:
+						break;
+				}
+			});
+
+			return peer;
+		};
+
+		createPeerRef.current = createPeer;
+		createPeer();
+
+		// Phones and tablets suspend the socket while asleep or backgrounded.
+		const wakeUp = () => {
+			if (disposed || document.hidden) return;
+			const peer = peerRef.current;
+			if (!peer || peer.destroyed) {
+				createPeer();
+				return;
+			}
+			if (peer.disconnected) {
+				try {
+					peer.reconnect();
+				} catch (error) {
+					console.error("Failed to reconnect to the signalling server:", error);
+					scheduleRecreate();
+				}
+			}
+		};
+
+		document.addEventListener("visibilitychange", wakeUp);
+		window.addEventListener("online", wakeUp);
+		window.addEventListener("focus", wakeUp);
 
 		return () => {
-			peer.destroy();
+			disposed = true;
+			if (recreateTimer) clearTimeout(recreateTimer);
+			document.removeEventListener("visibilitychange", wakeUp);
+			window.removeEventListener("online", wakeUp);
+			window.removeEventListener("focus", wakeUp);
+			createPeerRef.current = null;
+			peerRef.current?.destroy();
+			peerRef.current = null;
 		};
-	}, [handlePeerMessage]);
+	}, []);
 
 	const addFiles = useCallback(
 		(files: File[]) => {
@@ -608,15 +799,135 @@ export function usePeer() {
 		[setIsSender],
 	);
 
+	const cancelAttempt = useCallback(() => {
+		const attempt = attemptRef.current;
+		if (!attempt) return;
+		attempt.canceled = true;
+		if (attempt.connectTimer) clearTimeout(attempt.connectTimer);
+		if (attempt.handshakeTimer) clearTimeout(attempt.handshakeTimer);
+		attempt.connection?.close();
+		attemptRef.current = null;
+	}, []);
+
+	const failAttempt = useCallback(
+		(attempt: ConnectionAttempt, message: string) => {
+			if (attempt.canceled) return;
+			attempt.canceled = true;
+			if (attempt.connectTimer) clearTimeout(attempt.connectTimer);
+			if (attempt.handshakeTimer) clearTimeout(attempt.handshakeTimer);
+			attempt.connection?.close();
+			if (attemptRef.current === attempt) attemptRef.current = null;
+			console.warn("Connection failed:", message);
+			setConnectionStatus("error");
+			setConnectionError(message);
+		},
+		[],
+	);
+
+	const waitForPeerOpen = useCallback(
+		(peer: Peer, timeoutMs: number) =>
+			new Promise<Peer | null>((resolve) => {
+				if (peer.open) {
+					resolve(peer);
+					return;
+				}
+
+				let settled = false;
+				const finish = (result: Peer | null) => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					peer.off("open", handleOpen);
+					resolve(result);
+				};
+				const handleOpen = () => finish(peer);
+				const timer = setTimeout(() => finish(null), timeoutMs);
+				peer.on("open", handleOpen);
+			}),
+		[],
+	);
+
+	/** Waits until our own signalling socket is usable, replacing it if needed. */
+	const ensurePeerReady = useCallback(async () => {
+		let peer = peerRef.current;
+
+		if (!peer || peer.destroyed) {
+			peer = createPeerRef.current?.() ?? null;
+		}
+		if (!peer) return null;
+
+		if (peer.disconnected) {
+			try {
+				peer.reconnect();
+			} catch (error) {
+				console.error("Failed to reconnect to the signalling server:", error);
+				peer = createPeerRef.current?.() ?? peer;
+			}
+		}
+
+		return waitForPeerOpen(peer, PEER_READY_TIMEOUT_MS);
+	}, [waitForPeerOpen]);
+
 	const connectToSender = useCallback(
-		(senderId: string) => {
-			if (!peerRef.current) return;
+		async (senderId: string) => {
+			if (!senderId) return;
 
-			const conn = peerRef.current.connect(senderId);
-			setSenderConnection(conn);
+			// Never stack attempts at the same sender: two connections to one peer
+			// share the same key material and corrupt the handshake.
+			const inFlight = attemptRef.current;
+			if (inFlight && !inFlight.canceled && inFlight.senderId === senderId) {
+				return;
+			}
+			cancelAttempt();
+			lastSenderIdRef.current = senderId;
 
-			conn.on("open", () => {
+			setConnectionError(null);
+			setConnectionStatus("connecting");
+
+			const attempt: ConnectionAttempt = {
+				senderId,
+				canceled: false,
+				connection: null,
+				connectTimer: null,
+				handshakeTimer: null,
+			};
+			attemptRef.current = attempt;
+
+			const peer = await ensurePeerReady();
+			if (attempt.canceled) return;
+			if (!peer) {
+				failAttempt(
+					attempt,
+					"Could not reach the connection service (0.peerjs.com). Check your internet connection and try again.",
+				);
+				return;
+			}
+			if (senderId === peer.id) {
+				failAttempt(
+					attempt,
+					"That link points back at this device. Open the QR code on the other device.",
+				);
+				return;
+			}
+
+			let connection: DataConnection;
+			try {
+				connection = peer.connect(senderId, { reliable: true });
+			} catch (error) {
+				console.error("Failed to start connection:", error);
+				failAttempt(attempt, connectionErrorMessage(error));
+				return;
+			}
+
+			attempt.connection = connection;
+			setSenderConnection(connection);
+
+			connection.on("open", () => {
+				if (attempt.canceled) return;
+				if (attempt.connectTimer) clearTimeout(attempt.connectTimer);
+				attempt.connectTimer = null;
 				setConnectionStatus("verifying");
+				setConnectionError(null);
 				setIsSender(false);
 
 				// Generate a unique name for this receiver
@@ -627,24 +938,123 @@ export function usePeer() {
 				});
 
 				// Send hello message with our name
-				conn.send({ type: "HELLO", name: receiverName });
+				connection.send({ type: "HELLO", name: receiverName });
+
+				// The security handshake must finish too, or we would spin forever.
+				attempt.handshakeTimer = setTimeout(() => {
+					failAttempt(
+						attempt,
+						"Connected to the sender, but the security check never completed. Please try again.",
+					);
+				}, HANDSHAKE_TIMEOUT_MS);
 			});
 
-			conn.on("data", (data) => {
-				handlePeerMessage(data as PeerMessage, conn);
+			connection.on("data", (data) => {
+				handlePeerMessageRef.current?.(data as PeerMessage, connection);
 			});
 
-			const handleDisconnect = () => {
+			connection.on("error", (error) => {
+				console.error("Connection error:", error);
+				failAttempt(attempt, connectionErrorMessage(error));
+			});
+
+			let lostTimer: ReturnType<typeof setTimeout> | null = null;
+
+			/** The peer is gone (their page closed, or the network dropped). */
+			const reportLost = () => {
+				if (lostTimer) {
+					clearTimeout(lostTimer);
+					lostTimer = null;
+				}
+				attempt.canceled = true;
+				if (attempt.connectTimer) clearTimeout(attempt.connectTimer);
+				if (attempt.handshakeTimer) clearTimeout(attempt.handshakeTimer);
+				if (attemptRef.current === attempt) attemptRef.current = null;
+				setSenderConnection(null);
+				setIsConnected(false);
+				setConnectionStatus("disconnected");
+				setConnectionError(
+					"Lost the connection to the sender. Check that their DropShare page is still open, then try again.",
+				);
+			};
+
+			connection.on("iceStateChanged", (state) => {
+				if (state === "connected" || state === "completed") {
+					// Recovered: a transient drop is not worth reporting.
+					if (lostTimer) {
+						clearTimeout(lostTimer);
+						lostTimer = null;
+					}
+					return;
+				}
+
+				if (state === "disconnected") {
+					// Chrome often stays here (instead of moving on to "failed")
+					// when the other side vanishes, so don't wait for "failed".
+					if (!connection.open || lostTimer) return;
+					lostTimer = setTimeout(reportLost, ICE_LOST_GRACE_MS);
+					return;
+				}
+
+				if (state === "failed" || state === "closed") {
+					if (connection.open) {
+						reportLost();
+						return;
+					}
+					failAttempt(
+						attempt,
+						`Could not reach the sender. ${connectionHint()}`,
+					);
+				}
+			});
+
+			const handleClosed = () => {
+				if (attempt.canceled) return;
+				attempt.canceled = true;
+				if (attempt.connectTimer) clearTimeout(attempt.connectTimer);
+				if (attempt.handshakeTimer) clearTimeout(attempt.handshakeTimer);
+				if (attemptRef.current === attempt) attemptRef.current = null;
 				setSenderConnection(null);
 				setIsConnected(false);
 				setReceivedFiles([]);
+				setConnectionStatus((current) =>
+					current === "connected" ? "disconnected" : "error",
+				);
+				setConnectionError(
+					(current) => current ?? "The connection to the sender closed.",
+				);
 			};
 
-			conn.on("close", handleDisconnect);
-			conn.on("error", handleDisconnect);
+			connection.on("close", handleClosed);
+
+			// A connection that never opens is the common failure case: report it
+			// instead of leaving the user on a spinner forever.
+			if (!connection.open) {
+				attempt.connectTimer = setTimeout(() => {
+					failAttempt(
+						attempt,
+						`Could not reach the sender in time. ${connectionHint()}`,
+					);
+				}, CONNECT_TIMEOUT_MS);
+			}
 		},
-		[handlePeerMessage, setSenderConnection, setIsSender],
+		[
+			cancelAttempt,
+			ensurePeerReady,
+			failAttempt,
+			setIsSender,
+			setSenderConnection,
+		],
 	);
+
+	/** Re-runs the last connection attempt (used by the Retry button). */
+	const retryConnection = useCallback(() => {
+		const senderId = lastSenderIdRef.current;
+		cancelAttempt();
+		if (senderId) {
+			connectToSender(senderId);
+		}
+	}, [cancelAttempt, connectToSender]);
 
 	const requestFile = useCallback((fileId: string) => {
 		const { senderConnection } = usePeerStore.getState();
@@ -698,8 +1108,12 @@ export function usePeer() {
 		downloadProgress,
 		isConnected,
 		connectionStatus,
+		connectionError,
+		isSignalingConnected,
+		signalingError,
 		addFiles,
 		connectToSender,
+		retryConnection,
 		requestFile,
 		removeFile,
 		removePeer,

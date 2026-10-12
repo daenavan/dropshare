@@ -1,5 +1,6 @@
-import { FileText, Loader2, Wifi, WifiOff } from "lucide-react";
+import { FileText, Loader2, RotateCw, Wifi, WifiOff } from "lucide-react";
 import { FileItem } from "@/components/FileItem";
+import { Button } from "@/components/ui/button";
 import {
 	Card,
 	CardContent,
@@ -26,6 +27,10 @@ interface ReceiverViewProps {
 		| "connected"
 		| "error"
 		| "disconnected";
+	/** Why the connection failed, when it did. */
+	connectionError?: string | null;
+	/** Retries the connection to the same sender. */
+	onRetry?: () => void;
 }
 
 export function ReceiverView({
@@ -34,6 +39,8 @@ export function ReceiverView({
 	onRequestFile,
 	isConnected,
 	connectionStatus,
+	connectionError,
+	onRetry,
 }: ReceiverViewProps) {
 	const isDownloading = (fileId: string) => {
 		return fileId in downloadProgress;
@@ -62,13 +69,15 @@ export function ReceiverView({
 					return {
 						title: "Connection Failed",
 						description:
+							connectionError ??
 							"Failed to establish secure connection. Please try again.",
 						icon: <Wifi className="h-5 w-5 text-destructive" />,
 					};
 				case "disconnected":
 					return {
 						title: "Disconnected",
-						description: "The sender has disconnected.",
+						description:
+							connectionError ?? "The connection to the sender was lost.",
 						icon: <WifiOff className="h-5 w-5" />,
 					};
 				default:
@@ -98,6 +107,27 @@ export function ReceiverView({
 								<Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
 							)}
 					</div>
+
+					{connectionStatus === "error" ||
+					connectionStatus === "disconnected" ? (
+						<div className="space-y-4">
+							{onRetry && (
+								<Button onClick={onRetry} className="w-full">
+									<RotateCw className="mr-2 h-4 w-4" />
+									Try again
+								</Button>
+							)}
+							<p className="text-xs text-muted-foreground">
+								Keep the sender's DropShare page open while connecting. Both
+								devices work best on the same Wi-Fi network.
+							</p>
+						</div>
+					) : (
+						<p className="text-xs text-muted-foreground">
+							Keep the sender's DropShare page open. On some networks this can
+							take a few seconds.
+						</p>
+					)}
 				</CardContent>
 			</Card>
 		);

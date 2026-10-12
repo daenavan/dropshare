@@ -40,9 +40,13 @@ export default function App() {
 		connectionStatus,
 		addFiles,
 		connectToSender,
+		retryConnection,
 		requestFile,
 		removeFile,
 		removePeer,
+		connectionError,
+		isSignalingConnected,
+		signalingError,
 	} = usePeer();
 
 	// Check for sender ID in URL hash and connect if present
@@ -97,6 +101,8 @@ export default function App() {
 					onRequestFile={requestFile}
 					isConnected={isConnected}
 					connectionStatus={connectionStatus}
+					connectionError={connectionError}
+					onRetry={retryConnection}
 				/>
 			);
 		}
@@ -117,6 +123,8 @@ export default function App() {
 				peerId={peerId}
 				sharedFiles={sharedFiles}
 				connectedPeers={connectedPeers}
+				isSignalingConnected={isSignalingConnected}
+				signalingError={signalingError}
 				onFilesSelected={(files) => {
 					setHasInteracted(true);
 					addFiles(files);

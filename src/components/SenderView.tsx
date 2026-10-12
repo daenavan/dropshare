@@ -36,6 +36,9 @@ interface SenderViewProps {
 	peerId: string | null;
 	sharedFiles: SharedFile[];
 	connectedPeers: ConnectedPeer[];
+	/** False while the signalling socket is down (the QR code may be stale). */
+	isSignalingConnected?: boolean;
+	signalingError?: string | null;
 	onFilesSelected: (files: File[]) => void;
 	onRemoveFile: (fileId: string) => void;
 	onRemovePeer: (peerId: string) => void;
@@ -45,6 +48,8 @@ export function SenderView({
 	peerId,
 	sharedFiles,
 	connectedPeers,
+	isSignalingConnected = true,
+	signalingError = null,
 	onFilesSelected,
 	onRemoveFile,
 	onRemovePeer,
@@ -111,6 +116,16 @@ export function SenderView({
 							{/* Always rendered dark-on-light with a quiet zone: an
 							    inverted (light-on-dark) code is unreadable for many
 							    scanners, including the browser camera. */}
+							{!isSignalingConnected && (
+								<Alert variant="destructive" className="max-w-sm text-left">
+									<AlertCircle className="h-4 w-4" />
+									<AlertDescription>
+										{signalingError ??
+											"Lost the connection to the connection service. Reconnecting… scans may fail until this clears."}
+									</AlertDescription>
+								</Alert>
+							)}
+
 							<div className="p-5 bg-white rounded-xl border border-neutral-200">
 								<QRCode
 									value={qrValue}
@@ -180,7 +195,20 @@ export function SenderView({
 						<div className="flex items-center justify-center h-52 text-muted-foreground">
 							<div className="text-center">
 								<QrCode className="h-12 w-12 mx-auto mb-2 opacity-50" />
-								<p>Generating connection...</p>
+								<p>
+									{!isSignalingConnected && signalingError
+										? signalingError
+										: "Generating connection..."}
+								</p>
+								{!isSignalingConnected && (
+									<Button
+										variant="outline"
+										className="mt-3"
+										onClick={() => window.location.reload()}
+									>
+										Reload
+									</Button>
+								)}
 							</div>
 						</div>
 					)}

@@ -50,11 +50,48 @@ To run DropShare locally, follow these steps:
    - Show the generated QR code to others or share the connection URL
    - Connected devices will appear in the "Connected Receivers" section
 
+
+> **Connecting from another device?** Both devices need to be on the same Wi-Fi for a direct connection, and the sender's tab has to stay open. If a connection fails, DropShare shows the reason on screen along with a retry button. See [Connection Troubleshooting](#-connection-troubleshooting).
+
 2. **For Receiving Files:**
    - Click "Scan QR Code" on the landing page
    - Point your camera at the sender's QR code
    - Once connected, available files will appear in your list
    - Click the download button on any file to save it to your device
+
+## 🔌 Connection Troubleshooting
+
+DropShare connects devices directly (peer-to-peer), so both devices have to be able to reach each other. If a connection does not come up, DropShare now tells you why on screen. The usual causes:
+
+*   **Both devices should be on the same Wi-Fi**, and that Wi-Fi has to allow device-to-device traffic. Guest networks and some ISP routers enable *client isolation*, which silently blocks it.
+*   **Keep the sender's tab open and awake.** If the sender's device sleeps or the tab is discarded, their QR code goes stale. DropShare reconnects in place (and shows a new QR code if the address had to change), but a sleeping device cannot answer.
+*   **Turn off VPNs and private DNS** on both devices while connecting — they often route around the local network.
+*   **Nothing to install:** the connection is set up through a public signalling server (`0.peerjs.com`). If it is unreachable, both pages will say so.
+
+## 🌐 TURN Relay (Optional but Recommended)
+
+On most networks DropShare connects directly, using STUN to discover each other. When the network blocks device-to-device traffic (client isolation, guest Wi-Fi) or the devices are on different networks, a [TURN](https://en.wikipedia.org/wiki/Traversal_Using_Relays_around_NAT) relay lets the two peers meet through a server in the middle. Transfers stay end-to-end encrypted either way — the relay only sees encrypted chunks.
+
+Set these when building (they are inlined into the bundle):
+
+| Variable | Example | Description |
+| --- | --- | --- |
+| `VITE_TURN_URL` | `turn:turn.example.com:3478?transport=udp,turns:turn.example.com:5349` | Comma-separated TURN URL(s) |
+| `VITE_TURN_USERNAME` | `dropuser` | TURN username (optional) |
+| `VITE_TURN_CREDENTIAL` | `supersecret` | TURN password (optional) |
+
+Locally, put them in a `.env` file in the project root:
+
+```bash
+VITE_TURN_URL=turn:turn.example.com:3478?transport=udp
+VITE_TURN_USERNAME=dropuser
+VITE_TURN_CREDENTIAL=supersecret
+```
+
+For the GitHub Pages deployment, add `VITE_TURN_URL`, `VITE_TURN_USERNAME` and
+`VITE_TURN_CREDENTIAL` as repository secrets — the deploy workflow passes them to
+the build. Any TURN server works; [coturn](https://github.com/coturn/coturn) is
+the common self-hosted choice.
 
 ## 🛠️ Tech Stack
 
