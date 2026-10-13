@@ -1,0 +1,33 @@
+# Bun configuration — https://bun.com/docs/runtime/bunfig
+#
+# Goal: install-time supply-chain hardening. Malicious npm releases are usually
+# detected and yanked within hours-to-days of publishing, so both settings below
+# remove the window in which a compromised version can reach this machine.
+# Project config takes precedence over global ~/.bunfig.toml / ~/.config/.bunfig.toml.
+
+[install]
+
+# Refuse any package version published less than 7 days ago.
+# When the age gate blocks the newest version, Bun resolves to the newest version
+# that is old enough; if none qualifies the install fails loudly:
+#   error: Package "x" with tag "latest" not found (all versions blocked by minimum-release-age)
+# This applies to direct and transitive dependencies, and only to *new* resolution:
+# versions already pinned in bun.lock are never re-checked, so nothing changes
+# until you deliberately update a dependency.
+minimumReleaseAge = 604800
+
+# Escape hatch: packages where you always want the newest release (e.g. to take a
+# security fix immediately, or a fast-moving first-party dependency).
+# Add entries narrowly and one at a time — every entry is an unguarded package.
+# minimumReleaseAgeExcludes = ["example-package"]
+
+# Never run dependency lifecycle scripts (preinstall/install/postinstall).
+# Postinstall scripts are the primary code-execution vector of an install-time
+# attack, and they run with your user's privileges. Nothing in this project needs
+# them: esbuild and @tailwindcss/oxide ship their platform binaries through
+# optionalDependencies, so the build works without their postinstall scripts.
+#
+# If a tool ever does require its install script, allowlist just that package
+# instead of dropping this setting:
+#   "trustedDependencies": ["that-package"]   # in package.json
+ignoreScripts = true
